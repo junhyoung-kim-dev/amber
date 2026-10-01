@@ -28,10 +28,8 @@ corepack enable && corepack prepare pnpm@latest --activate      # pnpm (또는 b
 
 ## 2. 빌드하고 설치
 
-private 저장소라 접근 권한이 있는 계정으로 받습니다.
-
 ```bash
-gh repo clone junhyoung-kim-dev/amber && cd amber
+git clone https://github.com/junhyoung-kim-dev/amber && cd amber
 pnpm install
 pnpm tauri build --bundles app
 ditto src-tauri/target/release/bundle/macos/Amber.app /Applications/Amber.app
