@@ -33,7 +33,6 @@ import {
 } from "../lib/todos";
 import {
   childrenOf as childrenIn,
-  clampDropDepth,
   dayProgress,
   descendantCount,
   flattenSubset,
@@ -42,6 +41,7 @@ import {
   visibleRoots,
 } from "../lib/todoTree";
 import { listBlocks } from "../lib/timeBlocks";
+import { trackTodoDrag } from "../lib/todoDrag";
 import {
   VACATION_KINDS,
   listVacations,
@@ -206,195 +206,67 @@ export function TodoView({
     defaultWidth: CAL_W_DEFAULT,
   });
 
-  // 할 일 트리 드래그 (포인터 기반 — WKWebView 에서 HTML5 DnD 보다 안정적).
-  // Todoist 문법: **세로 = 삽입 위치, 가로 = 깊이(들여쓰기)**. 한 제스처로 재정렬과
-  // 부모 변경(하위로 넣기·꺼내기·다른 부모로)을 모두 처리한다.
-  // 피드백: 원본(서브트리째)은 접히고, 삽입 지점 아래 행들이 **실시간으로 밀려 gap 을 연다**
-  // (0.35s ease-in-out — 추종 모션 예외, §9). 행 복제 오버레이가 커서를 1:1 로 따라오고, gap 안의 깊이만큼 들여쓴
-  // 2px 삽입선이 같은 트랜지션으로 gap 과 함께 미끄러져 떨어질 곳을 보여준다.
-  // 드래그 중 리렌더 없이 transform 명령형, 커밋은 놓을 때 한 번.
+  const cancelDragRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelDragRef.current?.(), [active, selected, unit]);
+
+  // 세로 이동은 순서, 가로 이동은 깊이. 목록 배치는 유지해 스크롤이 튀지 않게 한다.
   function startDrag(e: ReactMouseEvent, id: number) {
+    if (e.button !== 0 || busy) return;
     e.preventDefault();
+    cancelDragRef.current?.();
     const listEl = listRef.current;
     if (!listEl) return;
-    // 이월 고스트(다른 날로 옮겨간 행·그 기록)도 모델에 **남긴다** — 함께 밀리고, 그 하위로
-    // 드롭해 부모 삼을 수 있다(하위 추가(+)와 같은 문법: 새 자식은 보는 날짜에 남고 부모는
-    // 다른 날에 산다 — visibleRoots 가 그런 행을 그린다). 대신 커밋에서 둘을 거른다:
-    //  · gone(라이브 행이 지워진 기록)은 부모가 될 수 없다 — resolveDrop 이 null 로 거절
-    //  · sort_order 재부여는 이 날짜의 라이브 행만 — 고스트의 순서는 실제 날짜의 형제
-    //    그룹 소속이라, 같이 매기면 그 날짜에서의 순서가 망가진다
     const cur = dragRowsRef.current;
     const node = cur.find((t) => t.id === id);
-    if (!node || node.carried === 1) return; // 고스트 자체는 도착 날짜에서 다룬다(grip 도 없다)
-    const goneIds = new Set(
-      cur.filter((t) => t.gone === 1).map((t) => t.id),
-    );
-    const carriedIds = new Set(
-      cur.filter((t) => t.carried === 1).map((t) => t.id),
-    );
-
-    // 트리 판단(플랫 행·서브트리·깊이 clamp·드롭 해석)은 전부 순수 모듈 lib/todoTree.ts.
-    // 여기 남는 건 실측(rect)·오버레이 transform·DB 커밋뿐이다.
-    // flattenSubset 인 이유: 이월로 부모만 다른 날에 있는 자식이 이 날 목록에 남을 수 있는데
-    // (moveTodos 는 parent_id 를 안 건드린다), flattenTree 는 그런 행을 통째로 잃는다.
+    if (!node || node.carried === 1) return;
+    const goneIds = new Set(cur.filter((t) => t.gone === 1).map((t) => t.id));
+    const carriedIds = new Set(cur.filter((t) => t.carried === 1).map((t) => t.id));
     const rows = flattenSubset(cur);
-    const srcDepth = rows.find((r) => r.id === id)?.depth ?? 0;
-    // 드래그 서브트리 — 자기 자신/자손 안으로는 못 들어간다 (후보에서 제외 = 순환 방지)
     const subtree = subtreeIds(cur, id);
-
-    // 행 요소 맵 (실측은 원본을 접은 뒤 beginVisuals 에서 — 접힘 reflow 반영 좌표가 필요)
-    const els = new Map<number, HTMLElement>();
-    for (const el of Array.from(
-      listEl.querySelectorAll<HTMLElement>(".todo-row[data-todo-id]"),
-    )) {
-      els.set(Number(el.dataset.todoId), el);
+    const elements = new Map<number, HTMLElement>();
+    for (const el of listEl.querySelectorAll<HTMLElement>(".todo-row[data-todo-id]")) {
+      elements.set(Number(el.dataset.todoId), el);
     }
-    const srcRowEl = els.get(id);
-    const srcUnitEl = listEl.querySelector<HTMLElement>(
-      `.todo-unit[data-unit-id="${id}"]`,
-    );
-    if (!srcRowEl || !srcUnitEl) return;
-    const srcRect = srcRowEl.getBoundingClientRect(); // 접기 전 — 오버레이 크기/grab 오프셋용
-    const gapH = srcRect.height; // 서브트리는 오버레이 칩(+N)으로 접히므로 gap 은 한 행 높이
-    // 삽입 후보 = 서브트리 제외 행들 (세로 순서 유지)
-    const others = rows.filter((r) => !subtree.has(r.id) && els.has(r.id));
-    const rects = new Map<number, DOMRect>();
-    let listRect = listEl.getBoundingClientRect();
-    // 목록은 카드 안의 스크롤 칸이고 손잡이 자리만큼 좌우로 넓혀 둔 여백이 있다(styles.css
-    // .todo-card > .todo-listing). 삽입선은 이 칸 안의 absolute 라 좌표를 여백과 스크롤만큼 되돌린다.
-    const listCss = getComputedStyle(listEl);
-    const padL = parseFloat(listCss.paddingLeft) || 0;
-    const padR = parseFloat(listCss.paddingRight) || 0;
-    const padT = parseFloat(listCss.paddingTop) || 0;
-
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const grabX = e.clientX - srcRect.left;
-    const grabY = e.clientY - srcRect.top;
-    let moved = false;
-    let overlay: HTMLDivElement | null = null;
-    let line: HTMLDivElement | null = null;
-    let slot: { idx: number; depth: number } | null = null;
-
-    const beginVisuals = () => {
-      document.body.classList.add("dragging-rows");
-      listEl.classList.add("reordering"); // 드래그 중에만 밀림 트랜지션 활성
-      // 원본(서브트리째) 접기 → 아래 행들이 자연 reflow 로 올라온 좌표를 실측
-      srcUnitEl.style.display = "none";
-      for (const r of others) {
-        rects.set(r.id, els.get(r.id)!.getBoundingClientRect());
-      }
-      listRect = listEl.getBoundingClientRect();
-      // 커서를 따라오는 행 복제 오버레이 (본문 + 자손 수 칩)
-      overlay = document.createElement("div");
-      overlay.className = "todo-drag-overlay";
-      overlay.style.width = `${Math.min(srcRect.width, 420)}px`;
-      const label = document.createElement("span");
-      label.className = "todo-drag-label";
-      label.textContent = node.content;
-      overlay.appendChild(label);
-      const descCount = subtree.size - 1;
-      if (descCount > 0) {
-        const chip = document.createElement("span");
-        chip.className = "todo-drag-count";
-        chip.textContent = `+${descCount}`;
-        overlay.appendChild(chip);
-      }
-      document.body.appendChild(overlay);
-      // 삽입선은 첫 배치 좌표가 정해진 뒤(apply)에 붙인다 — 미리 붙이면 (0,0)에서
-      // 첫 슬롯까지 날아오는 트랜지션이 보인다
-      line = document.createElement("div");
-      line.className = "todo-drop-line";
-    };
-
-    const apply = (clientX: number, clientY: number) => {
-      if (!overlay || !line) return;
-      overlay.style.transform = `translate(${clientX - grabX}px, ${clientY - grabY}px)`;
-      // 삽입 index: 커서 Y 가 중심을 지난 행 수 (others 는 세로 정렬 상태, 접힘 후 좌표)
-      let idx = 0;
-      for (const r of others) {
-        const rc = rects.get(r.id)!;
-        if (clientY > rc.top + rc.height / 2) idx++;
-        else break;
-      }
-      const above = others[idx - 1] ?? null;
-      const below = others[idx] ?? null;
-      const desired = srcDepth + Math.round((clientX - startX) / INDENT);
-      const depth = clampDropDepth(desired, above, below);
-      slot = { idx, depth };
-      // 밀림: 슬롯 아래 행 전부 gap 높이만큼 내려 자리를 비운다 (트랜지션은 .reordering CSS)
-      for (let j = 0; j < others.length; j++) {
-        const el = els.get(others[j].id)!;
-        el.style.transform = j >= idx ? `translateY(${gapH}px)` : "";
-      }
-      // 삽입선: 열린 gap 의 세로 중앙 + 깊이만큼 들여쓴 왼쪽 (listing 좌표계).
-      // 위치는 transform — 세로 이동은 행 밀림과 같은 트랜지션으로 함께 미끄러진다(styles.css)
-      const y = below
-        ? rects.get(below.id)!.top + gapH / 2
-        : above
-          ? rects.get(above.id)!.bottom + 4
-          : listRect.top + padT + 2;
-      const lx = padL + 10 + depth * INDENT;
-      line.style.width = `${Math.max(0, listRect.width - padR - lx - 8)}px`;
-      line.style.transform = `translate(${lx}px, ${y - listRect.top + listEl.scrollTop - 1}px)`;
-      if (!line.isConnected) {
-        listEl.appendChild(line); // 첫 배치 — 좌표를 갖고 붙어 그 자리에서 페이드인만
-        requestAnimationFrame(() => line?.classList.add("on"));
-      }
-    };
-
-    const onMove = (ev: MouseEvent) => {
-      if (!moved) {
-        if (
-          Math.abs(ev.clientY - startY) < 5 &&
-          Math.abs(ev.clientX - startX) < 5
-        )
-          return;
-        moved = true;
-        beginVisuals();
-      }
-      apply(ev.clientX, ev.clientY);
-    };
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      document.body.classList.remove("dragging-rows");
-      // 트랜지션을 먼저 끄고(즉시 스냅) 밀림 transform 제거 + 원본 복원 → reload 결과가 정본
-      listEl.classList.remove("reordering");
-      for (const r of others) {
-        const el = els.get(r.id);
-        if (el) el.style.transform = "";
-      }
-      srcUnitEl.style.display = "";
-      overlay?.remove();
-      line?.remove();
-      if (!moved || !slot) return;
-
-      const drop = resolveDrop(cur, others, id, slot, goneIds); // null = 제자리·불가 슬롯
-      if (!drop) return;
-      const newParent = drop.newParentId;
-      const oldParent = node.parent_id ?? null;
-      // 고스트 형제는 재부여에서 제외 — 그 행들의 sort_order 는 실제 날짜의 그룹 것이다
-      const liveOrder = drop.orderedSiblingIds.filter(
-        (sid) => !carriedIds.has(sid),
-      );
-      void (async () => {
-        try {
-          if (newParent !== oldParent) await reparentTodo(id, newParent);
-          await reorderTodos(liveOrder);
-          // 완료 상태 재계산: 떠난 그룹(마지막 미완료가 빠졌을 수 있음) + 새 그룹
-          await recomputeChainFrom(oldParent);
-          if (newParent !== oldParent) await recomputeChainFrom(newParent);
-          await reloadDay();
-          await reloadWeek();
-          void reloadCounts();
-        } catch (err) {
-          setError(errMsg(err));
-        }
-      })();
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    const sourceRow = elements.get(id);
+    const sourceUnit = listEl.querySelector<HTMLElement>(`.todo-unit[data-unit-id="${id}"]`);
+    if (!sourceRow || !sourceUnit) return;
+    const others = rows.filter((r) => !subtree.has(r.id) && elements.has(r.id));
+    cancelDragRef.current = trackTodoDrag({
+      list: listEl,
+      sourceRow,
+      sourceUnit,
+      candidates: others.map((r) => ({ ...r, element: elements.get(r.id)! })),
+      sourceDepth: rows.find((r) => r.id === id)?.depth ?? 0,
+      startX: e.clientX,
+      startY: e.clientY,
+      label: node.content,
+      descendants: subtree.size - 1,
+      indent: INDENT,
+      onDrop: (slot) => {
+        const drop = resolveDrop(cur, others, id, slot, goneIds);
+        if (!drop) return;
+        const newParent = drop.newParentId;
+        const oldParent = node.parent_id ?? null;
+        // 고스트의 순서는 실제 날짜에 속하므로 이 날짜의 재정렬에서 제외한다.
+        const liveOrder = drop.orderedSiblingIds.filter((sid) => !carriedIds.has(sid));
+        setBusy(true);
+        void (async () => {
+          try {
+            if (newParent !== oldParent) await reparentTodo(id, newParent);
+            await reorderTodos(liveOrder);
+            await recomputeChainFrom(oldParent);
+            if (newParent !== oldParent) await recomputeChainFrom(newParent);
+            await reloadDay();
+            await reloadWeek();
+            void reloadCounts();
+          } catch (err) {
+            setError(errMsg(err));
+          } finally {
+            setBusy(false);
+          }
+        })();
+      },
+    });
   }
 
   // 선택 날짜의 목록 + 밀린 할 일 + 이날 학습완료 개념
