@@ -17,9 +17,9 @@ category: "개발"
 ## Issue 및 PR
 
 - Issue: [#1](https://github.com/junhyoung-kim-dev/amber/issues/1)
-- PR: 생성 예정 (`ts-kyungjun:jun/1` → `junhyoung-kim-dev:main`)
+- PR: [#2](https://github.com/junhyoung-kim-dev/amber/pull/2) (`ts-kyungjun:jun/1` → `junhyoung-kim-dev:main`)
 - Branch: `jun/1` (포크)
-- Commit: `fb7171f` 기준, 이번 브랜치 HEAD에서 변경 추적
+- Commit: 구현 `ebfd5fb` (`fb7171f` 기준), 문서의 PR 링크는 후속 커밋에서 반영
 
 ## 현재 기준 확인 내용
 
