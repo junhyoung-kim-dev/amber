@@ -11,7 +11,6 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::ipc::Channel;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
 use tokio::time::timeout;
 
 /// 살아 있는 CLI 자식 프로세스: cancel_key → pid.
@@ -122,17 +121,37 @@ const NOTE_EDIT_SYSTEM_PROMPT: &str = include_str!("../context/note-edit.md");
 // 모노톤 판과 한 벌로 보이게: 요청마다 스타일이 달라지면 같은 노트 안 그림들이 다른 제품에서 붙여 온 듯 보인다.
 // 본문은 저장소가 아니라 빌드 시점에 build.rs 가 굽는다 — 없으면 빈 문자열이고, 그때는 아무것도 붙지 않는다.
 const SVG_STYLE_PROMPT: &str = include_str!(concat!(env!("OUT_DIR"), "/svg-style.md"));
+// 아키텍처 그림 스킬 — 있으면 스타일 가이드 뒤에 덧붙인다. 노트 AI 는 읽기 도구만 열린 dontAsk 실행이라 Skill 도구를
+// 부를 수 없다 — 그래서 스킬을 부르는 대신 본문을 build.rs 가 굽는다. 없으면 빈 문자열이고, 그때는 다리 문단도 붙지 않는다.
+const ARCHITECTURE_PROMPT: &str = include_str!(concat!(env!("OUT_DIR"), "/architecture-svg.md"));
+// 스킬은 코딩 에이전트용으로 쓰였다(웹, 명령, 저장소의 생성기). 노트 안에서 그걸 어떻게 읽을지만 앞에 한 문단 붙인다.
+const ARCHITECTURE_BRIDGE: &str = "# System architecture figures
+
+When the figure is a system architecture (services, data stores, brokers, external integrations and the flows between them), also follow the architecture guide below. It was written for a coding agent, so read it this way inside a note:
+- Deliver the figure as an svg block in the note, styled by this prompt's figure rules. A visual guide it points to on disk is already part of this prompt; do not try to open it.
+- Evidence comes only from the note and the reference folders you were given. You cannot browse or run commands, so skip the steps that need them: fetching logos, linters, generators, rebuilds and commits.
+- Use an official logo only when its asset is in a reference folder. Otherwise draw a neutral labeled node; never redraw a brand mark from memory.
+- You cannot ask back. Leave out a connection you cannot verify and say so in one short line under the figure.";
 // 전문 작성(ai_note_compose_stream)만: 노트를 stdout 이 아니라 초안 폴더의 절 파일들로 받는다 — 한 응답의 출력
 // 상한(32k 토큰)에 긴 노트가 잘리던 문제의 구조적 해법. 부분 수정은 조각이 짧아 스트리밍을 그대로 쓴다.
 const NOTE_DRAFT_FILES_PROMPT: &str = include_str!("../context/note-draft-files.md");
 
-/// 노트 프롬프트 + (있으면) SVG 스타일 가이드. 언어 지시(sys)는 이 뒤에 붙는다.
+/// 노트 프롬프트 + (있으면) SVG 스타일 가이드 + (있으면) 아키텍처 그림 스킬. 언어 지시(sys)는 이 뒤에 붙는다.
 fn note_prompt(base: &str) -> String {
+    let mut p = base.to_string();
     let guide = SVG_STYLE_PROMPT.trim();
-    if guide.is_empty() {
-        return base.to_string();
+    if !guide.is_empty() {
+        p.push_str("\n\n");
+        p.push_str(guide);
     }
-    format!("{base}\n\n{guide}")
+    let arch = ARCHITECTURE_PROMPT.trim();
+    if !arch.is_empty() {
+        p.push_str("\n\n");
+        p.push_str(ARCHITECTURE_BRIDGE);
+        p.push_str("\n\n");
+        p.push_str(arch);
+    }
+    p
 }
 
 // 필기노트 인라인 질문(노션 댓글식): 드래그한 문장 + 질문 → 짧은 답변.
@@ -283,7 +302,7 @@ async fn spawn_simple_cli_result(
     let combined = format!("[지시사항 — 반드시 그대로 따를 것]\n{system_prompt}\n\n{input}");
     let started = std::time::Instant::now();
 
-    let mut cmd = Command::new(&program);
+    let mut cmd = crate::shellenv::command(&program).await;
     // `-` = stdin 프롬프트. --ephemeral: 세션 파일 미저장, --skip-git-repo-check: repo 밖 실행 허용.
     // exec 기본 샌드박스는 read-only 라 순수 텍스트 변환에 안전.
     cmd.args(["exec", "-", "--ephemeral", "--skip-git-repo-check"]);
@@ -1302,7 +1321,7 @@ async fn stream_codex_result(
     let combined = format!("[지시사항 — 반드시 그대로 따를 것]\n{system_prompt}\n\n{input}");
     let started = std::time::Instant::now();
 
-    let mut cmd = Command::new(&program);
+    let mut cmd = crate::shellenv::command(&program).await;
     cmd.args(["exec", "-", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox"]);
     match write_dir {
         // 초안 폴더가 작업 루트: 그 안만 쓸 수 있고 읽기는 어디든(참고 폴더는 프롬프트의 [참고 폴더] 로 알린다)
@@ -1526,7 +1545,7 @@ pub(crate) async fn stream_claude_result_ext(
     on_activity: Option<&Channel<Activity>>,
     cancel_key: Option<&str>,
 ) -> Result<(String, MetaOut), AiError> {
-    let mut cmd = Command::new(&program);
+    let mut cmd = crate::shellenv::command(&program).await;
     cmd.arg("-p")
         .args(["--output-format", "stream-json"])
         .arg("--include-partial-messages")
@@ -1846,7 +1865,7 @@ async fn spawn_claude_result(
     // 추가 CLI 인자 — MCP 로 재료를 직접 긁는 실행에만 붙는다(나머지는 빈 슬라이스)
     extra_args: &[String],
 ) -> Result<(String, MetaOut), AiError> {
-    let mut cmd = Command::new(&program);
+    let mut cmd = crate::shellenv::command(&program).await;
     cmd.arg("-p").args(["--output-format", "json"]);
     if !model.is_empty() {
         cmd.args(["--model", &model]);
@@ -1987,7 +2006,7 @@ pub async fn ai_health(cli_path: Option<String>) -> Result<String, AiError> {
     let program = cli_path.unwrap_or_else(|| "claude".to_string());
     let res = timeout(
         Duration::from_secs(HEALTH_TIMEOUT_SECS),
-        Command::new(&program)
+        crate::shellenv::command(&program).await
             .arg("--version")
             .kill_on_drop(true)
             .output(),
@@ -2133,7 +2152,7 @@ mod tests {
         }
         // 모델이 보는 것은 본문 + 스타일 가이드를 이은 한 덩어리다. 가이드 쪽에 우열 지시가 남아 있으면
         // 본문이 "우열은 없다"고 해도 뒤에 온 쪽이 이긴다 — 셋 다 검사한다.
-        for body in [NOTE_SYSTEM_PROMPT, NOTE_EDIT_SYSTEM_PROMPT, SVG_STYLE_PROMPT] {
+        for body in [NOTE_SYSTEM_PROMPT, NOTE_EDIT_SYSTEM_PROMPT, SVG_STYLE_PROMPT, ARCHITECTURE_PROMPT] {
             assert!(
                 !body.to_lowercase().contains("prefer mermaid"),
                 "mermaid 를 기본으로 삼는 지시가 남아 있으면 svg 가 다시 변환된다"
@@ -2141,19 +2160,27 @@ mod tests {
         }
     }
 
-    // 스타일 가이드는 빌드 시점에 굽는 선택 사항이라(build.rs) 있을 때와 없을 때가 둘 다 정상이다.
+    // 스타일 가이드와 아키텍처 스킬은 빌드 시점에 굽는 선택 사항이라(build.rs) 있을 때와 없을 때가 둘 다 정상이다.
     // 없을 때 빈 줄만 덧붙이면 프롬프트 끝이 지저분해지고, 있을 때 언어 지시가 가운데 끼면 무시된다.
     #[test]
     fn note_prompts_append_the_svg_guide_only_when_there_is_one() {
+        let has_style = !SVG_STYLE_PROMPT.trim().is_empty();
+        let has_arch = !ARCHITECTURE_PROMPT.trim().is_empty();
         for base in [NOTE_SYSTEM_PROMPT, NOTE_EDIT_SYSTEM_PROMPT] {
             let p = note_prompt(base);
             assert!(p.starts_with(base), "본문 프롬프트가 앞에 그대로 와야 한다");
-            if SVG_STYLE_PROMPT.trim().is_empty() {
+            if !has_style && !has_arch {
                 assert_eq!(p, base, "가이드가 없으면 아무것도 덧붙이지 않는다");
             } else {
                 assert!(p.len() > base.len(), "가이드가 있는데 붙지 않았다");
             }
+            // 다리 문단은 스킬 본문이 있을 때만 — 공개 클론의 프롬프트에 없는 스킬을 가리키는 문장이 남으면 안 된다
+            assert_eq!(p.contains(ARCHITECTURE_BRIDGE), has_arch);
         }
+        // 스킬 목록용 앞머리(name, description)는 굽기 전에 빠진다
+        assert!(!ARCHITECTURE_PROMPT.trim_start().starts_with("---"));
+        // 배포되는 프롬프트는 로컬 지침의 위치를 모른다(AGENTS.md)
+        assert!(!ARCHITECTURE_BRIDGE.contains(".agents"));
         // 언어 지시는 언제나 맨 뒤 — 가이드가 붙든 안 붙든
         let s = sys(&note_prompt(NOTE_SYSTEM_PROMPT), Some("en"));
         assert!(s.rfind("[Output language").unwrap() > s.rfind(NOTE_SYSTEM_PROMPT).unwrap());
@@ -2259,6 +2286,7 @@ mod tests {
             ("note-edit", NOTE_EDIT_SYSTEM_PROMPT),
             ("note-ask", ASK_SYSTEM_PROMPT),
             ("svg-style", SVG_STYLE_PROMPT),
+            ("architecture-svg", ARCHITECTURE_PROMPT),
         ] {
             assert!(
                 !body.contains("usually Korean"),

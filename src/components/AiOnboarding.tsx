@@ -13,8 +13,9 @@ import {
 } from "../lib/config";
 import { detectAiClis, type DetectedCli } from "../lib/ai";
 import { t } from "../lib/i18n";
-import { Modal, Spinner } from "../ui";
+import { Modal, OptionCard, OptionGroup, Spinner } from "../ui";
 import { Icon } from "../icons";
+import { Button } from "@/components/ui/button";
 
 const INSTALL_LINKS: Record<AiProvider, string> = {
   claude: "https://claude.com/claude-code",
@@ -75,18 +76,18 @@ export function AiOnboarding({
       onClose={skip}
       footer={
         <>
-          <button className="btn btn-sm" onClick={skip} disabled={busy}>
+          <Button size="sm" onClick={skip} disabled={busy}>
             {t("settings.onb.skip")}
-          </button>
+          </Button>
           <span className="spacer" />
-          <button
-            className="btn btn-primary"
+          <Button
+            variant="primary"
             onClick={() => void connect()}
             disabled={busy || !selected || detecting}
           >
             <Icon name="sparkles" size={15} />
             {busy ? t("settings.onb.connecting") : t("settings.onb.connect")}
-          </button>
+          </Button>
         </>
       }
     >
@@ -103,22 +104,16 @@ export function AiOnboarding({
           <div className="hint">{t("settings.onb.searchHint")}</div>
         </div>
       ) : detected.length > 0 ? (
-        <div className="onb-grid">
+        <OptionGroup
+          className="onb-grid"
+          label={t("settings.ai.title")}
+          value={selected ?? ""}
+          onValueChange={(id) => setSelected(id as AiProvider)}
+        >
           {detected.map((d) => (
-            <button
-              key={d.id}
-              className={`onb-card ${selected === d.id ? "selected" : ""}`}
-              onClick={() => setSelected(d.id as AiProvider)}
-            >
-              <span className="onb-dot" />
-              <span className="onb-name">{d.name}</span>
-              <span className="onb-version">{d.version}</span>
-              <span className="onb-path" title={d.path}>
-                {d.path}
-              </span>
-            </button>
+            <OptionCard key={d.id} value={d.id} name={d.name} meta={d.version} sub={d.path} />
           ))}
-        </div>
+        </OptionGroup>
       ) : (
         <div className="onb-empty">
           <p>
@@ -128,13 +123,13 @@ export function AiOnboarding({
           </p>
           <div className="onb-links">
             {(Object.keys(INSTALL_LINKS) as AiProvider[]).map((p) => (
-              <button
+              <Button
                 key={p}
-                className="btn btn-sm"
+                size="sm"
                 onClick={() => void openUrl(INSTALL_LINKS[p])}
               >
                 {t("settings.onb.installGuide", { name: PROVIDER_LABELS[p] })}
-              </button>
+              </Button>
             ))}
           </div>
         </div>

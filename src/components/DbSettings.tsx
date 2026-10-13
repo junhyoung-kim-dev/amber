@@ -14,6 +14,7 @@ import {
   listConnections,
   type DbConnection,
 } from "../lib/dbconn";
+import { Button } from "@/components/ui/button";
 
 export function DbSettings({
   onAdd,
@@ -52,10 +53,10 @@ export function DbSettings({
     <SetSection
       title={t("settings.db.title")}
       action={
-        <button className="btn btn-sm" onClick={onAdd}>
+        <Button size="sm" onClick={onAdd}>
           <Icon name="plus" size={13} />
           {t("settings.db.add")}
-        </button>
+        </Button>
       }
     >
 
@@ -94,25 +95,25 @@ export function DbSettings({
                     {/* 마지막 시도 시각은 성공이든 실패든 '언제 기준의 상태인가'를 말해 준다 */}
                     {(st === "connected" || st === "failed") &&
                       c.last_sync_at &&
-                      ` · ${t("diagrams.db.syncAgo", { ago: timeAgo(c.last_sync_at) })}`}
+                      ` · ${t("erd.db.syncAgo", { ago: timeAgo(c.last_sync_at) })}`}
                   </div>
                   <div className="db-conn-actions">
                     {st === "needsPassword" && (
-                      <button className="btn btn-sm" onClick={() => onEnterPassword(c)}>
+                      <Button size="sm" onClick={() => onEnterPassword(c)}>
                         {t("settings.db.enterPassword")}
-                      </button>
+                      </Button>
                     )}
-                    <button className="btn btn-sm" onClick={() => onEdit(c)}>
+                    <Button size="sm" onClick={() => onEdit(c)}>
                       {t("settings.db.edit")}
-                    </button>
+                    </Button>
                     <Tooltip label={t("settings.db.deleteTitle")}>
-                      <button
-                        className="btn btn-sm btn-danger-ghost"
+                      <Button
+                        variant="danger" size="sm"
                         aria-label={t("settings.db.deleteTitle")}
                         onClick={() => onDelete(c)}
                       >
                         <Icon name="trash" size={13} />
-                      </button>
+                      </Button>
                     </Tooltip>
                   </div>
                 </div>
@@ -125,7 +126,7 @@ export function DbSettings({
       <p className="hint" style={{ marginTop: 14, lineHeight: 1.6 }}>
         {t("settings.db.hint")}
         <br />
-        {t("diagrams.db.hint.readonly")}
+        {t("erd.db.hint.readonly")}
       </p>
     </SetSection>
   );

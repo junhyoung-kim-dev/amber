@@ -1,17 +1,16 @@
-// DB 연결 모달 — 접속 정보(1/2) → 스키마 선택(2/2). 생성·편집 공용, 다이어그램 트리와 설정 양쪽에서 연다.
+// DB 연결 모달 — 접속 정보(1/2) → 스키마 선택(2/2). 생성과 편집 공용, ERD 탭과 설정 양쪽에서 연다.
 //
 // 비밀번호는 저장 순간 db_secret_set 으로 한 번만 Rust 에 넘긴다 — 프로필(SQLite)엔 절대 들어가지 않고,
 // 편집 모달은 값 대신 "키체인에 저장됨"만 보여준다.
-// 동기화(스냅샷·ERD 생성)는 여기서 하지 않는다: 프로필과 폴더만 만들고 onSaved 로 넘기면 DiagramsView 가
-// 트리 행마다 진행을 보여주며 스키마를 순서대로 읽는다 — 모달이 열린 채 기다리게 하지 않는다.
+// 동기화(스냅샷)는 여기서 하지 않는다: 프로필만 만들고 onSaved 로 넘기면 ErdView 가 트리 행마다 진행을
+// 보여주며 스키마를 순서대로 읽는다 — 모달이 열린 채 기다리게 하지 않는다.
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Checkbox, Modal, Select, Tooltip } from "../ui";
 import { Icon } from "../icons";
 import { t } from "../lib/i18n";
 import { errText } from "../lib/errors";
-import { diagramFileExists, ensureDiagramDir } from "../lib/diagrams";
-import { rootDisplayName } from "../lib/workspace";
+import { erdFileExists } from "../lib/erdStore";
 import {
   ENVS,
   createConnection,
@@ -30,6 +29,7 @@ import {
   type DbTestResult,
   type DbTls,
 } from "../lib/dbconn";
+import { Button } from "@/components/ui/button";
 
 type Step = "form" | "schemas";
 
@@ -60,16 +60,16 @@ export function PasswordField({
         onChange={(e) => onChange(e.target.value)}
       />
       <div className="db-pw-toggle">
-        <Tooltip label={show ? t("diagrams.db.password.hide") : t("diagrams.db.password.show")}>
-          <button
+        <Tooltip label={show ? t("erd.db.password.hide") : t("erd.db.password.show")}>
+          <Button
             type="button"
-            className="icon-btn ghost sm"
-            aria-label={show ? t("diagrams.db.password.hide") : t("diagrams.db.password.show")}
+            variant="ghost" size="icon-sm"
+            aria-label={show ? t("erd.db.password.hide") : t("erd.db.password.show")}
             aria-pressed={show}
             onClick={onToggle}
           >
             <Icon name={show ? "eye-off" : "eye"} size={14} />
-          </button>
+          </Button>
         </Tooltip>
       </div>
     </div>
@@ -77,9 +77,9 @@ export function PasswordField({
 }
 
 const TLS_OPTIONS: { value: DbTls; label: string }[] = [
-  { value: "preferred", label: t("diagrams.db.tls.preferred") },
-  { value: "required", label: t("diagrams.db.tls.required") },
-  { value: "disabled", label: t("diagrams.db.tls.disabled") },
+  { value: "preferred", label: t("erd.db.tls.preferred") },
+  { value: "required", label: t("erd.db.tls.required") },
+  { value: "disabled", label: t("erd.db.tls.disabled") },
 ];
 
 // P1 은 MySQL 만이라 종류 컨트롤을 두지 않는다 — 고를 수 없는 Select 는 자리만 차지하고 아무것도
@@ -231,13 +231,13 @@ export function DbConnectionModal({
     });
   }
 
-  /** 새 연결 폴더 이름 — 디스크의 폴더나 다른 연결의 folder_path 와 겹치면 -2, -3… 을 붙인다.
+  /** 새 연결의 스냅샷 폴더 이름(ERD 저장소 안) — 디스크의 폴더나 다른 연결의 folder_path 와 겹치면 -2, -3… 을 붙인다.
    *  비교는 소문자로 — macOS 파일시스템은 대소문자를 구분하지 않는다. */
   async function pickFolder(): Promise<string> {
     const base = folderNameFor(name);
     const taken = new Set((await listConnections()).map((c) => c.folder_path.toLowerCase()));
     let folder = base;
-    for (let i = 2; taken.has(folder.toLowerCase()) || (await diagramFileExists(folder)); i++)
+    for (let i = 2; taken.has(folder.toLowerCase()) || (await erdFileExists(folder)); i++)
       folder = `${base}-${i}`;
     return folder;
   }
@@ -245,7 +245,7 @@ export function DbConnectionModal({
   async function save() {
     if (busy || !fieldsValid || portNum === null) return;
     if (!editing && enabledCount === 0) {
-      setError(t("diagrams.db.schemas.none"));
+      setError(t("erd.db.schemas.none"));
       return;
     }
     setBusy(true);
@@ -288,10 +288,6 @@ export function DbConnectionModal({
           throw e;
         }
       }
-      await ensureDiagramDir(saved.folder_path);
-      for (const p of saved.schemas.filter((p) => p.enabled)) {
-        await ensureDiagramDir(`${saved.folder_path}/${p.name}`);
-      }
       notifyConnectionsChanged();
       onSaved(saved);
       onClose();
@@ -307,68 +303,67 @@ export function DbConnectionModal({
     footer = (
       <>
         <span className="spacer" />
-        <button className="btn btn-sm" onClick={onClose} disabled={busy}>
+        <Button size="sm" onClick={onClose} disabled={busy}>
           {t("common.cancel")}
-        </button>
+        </Button>
         {editing ? (
           <>
-            <button className="btn btn-sm" onClick={goSchemas} disabled={!test || busy}>
-              {t("diagrams.db.next")}
+            <Button size="sm" onClick={goSchemas} disabled={!test || busy}>
+              {t("erd.db.next")}
               <Icon name="chevron-right" size={13} />
-            </button>
-            <button className="btn btn-primary btn-sm" onClick={() => void save()} disabled={!fieldsValid || busy}>
-              {busy ? t("diagrams.working") : t("diagrams.db.saveChanges")}
-            </button>
+            </Button>
+            <Button variant="primary" size="sm" onClick={() => void save()} disabled={!fieldsValid || busy}>
+              {busy ? t("diagrams.working") : t("erd.db.saveChanges")}
+            </Button>
           </>
         ) : (
-          <button className="btn btn-primary btn-sm" onClick={goSchemas} disabled={!test || busy}>
-            {t("diagrams.db.next")}
+          <Button variant="primary" size="sm" onClick={goSchemas} disabled={!test || busy}>
+            {t("erd.db.next")}
             <Icon name="chevron-right" size={13} />
-          </button>
+          </Button>
         )}
       </>
     );
   } else {
     footer = (
       <>
-        <button className="btn btn-sm" onClick={() => setStep("form")} disabled={busy}>
+        <Button size="sm" onClick={() => setStep("form")} disabled={busy}>
           <Icon name="chevron-left" size={13} />
-          {t("diagrams.db.back")}
-        </button>
+          {t("erd.db.back")}
+        </Button>
         <span className="spacer" />
-        <button className="btn btn-sm" onClick={onClose} disabled={busy}>
+        <Button size="sm" onClick={onClose} disabled={busy}>
           {t("common.cancel")}
-        </button>
-        <button
-          className="btn btn-primary btn-sm"
+        </Button>
+        <Button
+          variant="primary" size="sm"
           onClick={() => void save()}
           disabled={busy || (!editing && enabledCount === 0)}
         >
           {busy
             ? t("diagrams.working")
             : editing
-              ? t("diagrams.db.saveChanges")
-              : t("diagrams.db.connectAndSync", { n: enabledCount })}
-        </button>
+              ? t("erd.db.saveChanges")
+              : t("erd.db.connectAndSync", { n: enabledCount })}
+        </Button>
       </>
     );
   }
 
   const envOptions = ENVS.map((e) => ({ value: e, label: envLabel(e) }));
-  const folderPreview = connection?.folder_path ?? folderNameFor(name || "db");
 
   return (
     <>
       <Modal
         open={open}
-        title={editing ? t("diagrams.db.modal.editTitle") : t("diagrams.db.modal.title")}
+        title={editing ? t("erd.db.modal.editTitle") : t("erd.db.modal.title")}
         onClose={onClose}
         footer={footer}
         fixedHeight
       >
         <div className="db-step-eyebrow">
           <span className="set-eyebrow">
-            {step === "form" ? t("diagrams.db.modal.step1") : t("diagrams.db.modal.step2")}
+            {step === "form" ? t("erd.db.modal.step1") : t("erd.db.modal.step2")}
           </span>
           {step === "form" && <span className="set-eyebrow db-kind">MySQL</span>}
         </div>
@@ -392,22 +387,22 @@ export function DbConnectionModal({
                 단계 라벨에 적어 둔다. */}
             <div className="db-form">
               <div className="field sp4">
-                <label>{t("diagrams.db.field.name")}</label>
+                <label>{t("erd.db.field.name")}</label>
                 <input
                   className="input"
                   autoFocus={!editing}
                   value={name}
-                  placeholder={t("diagrams.db.field.namePh")}
+                  placeholder={t("erd.db.field.namePh")}
                   onChange={(e) => setName(e.target.value)}
                 />
               </div>
               <div className="field sp2">
-                <label>{t("diagrams.db.field.env")}</label>
+                <label>{t("erd.db.field.env")}</label>
                 <Select value={env} options={envOptions} onChange={setEnv} block />
               </div>
 
               <div className="field sp3">
-                <label>{t("diagrams.db.field.host")}</label>
+                <label>{t("erd.db.field.host")}</label>
                 <input
                   className="input"
                   value={host}
@@ -416,7 +411,7 @@ export function DbConnectionModal({
                 />
               </div>
               <div className="field sp1">
-                <label>{t("diagrams.db.field.port")}</label>
+                <label>{t("erd.db.field.port")}</label>
                 <input
                   className="input"
                   value={port}
@@ -426,13 +421,13 @@ export function DbConnectionModal({
               </div>
               {/* TLS 는 '어디로 붙는가'에 속한다 — 호스트·포트와 같은 줄에 두면 계정 줄이 깨끗해진다 */}
               <div className="field sp2">
-                <label>{t("diagrams.db.field.tls")}</label>
+                <label>{t("erd.db.field.tls")}</label>
                 <Select value={tls} options={TLS_OPTIONS} onChange={touch(setTls)} block />
               </div>
-              <div className="hint sp6 db-form-hint">{t("diagrams.db.hint.host")}</div>
+              <div className="hint sp6 db-form-hint">{t("erd.db.hint.host")}</div>
 
               <div className="field sp3">
-                <label>{t("diagrams.db.field.user")}</label>
+                <label>{t("erd.db.field.user")}</label>
                 <input
                   className="input"
                   value={username}
@@ -442,15 +437,15 @@ export function DbConnectionModal({
                 />
               </div>
               <div className="field sp3">
-                <label>{t("diagrams.db.field.password")}</label>
+                <label>{t("erd.db.field.password")}</label>
                 {editing && !changePw ? (
                   <div className="db-pw-stored">
                     <Icon name="key" size={14} />
-                    <span>{t("diagrams.db.password.stored")}</span>
+                    <span>{t("erd.db.password.stored")}</span>
                     <span className="spacer" />
-                    <button type="button" className="btn btn-sm" onClick={() => setChangePw(true)}>
-                      {t("diagrams.db.password.change")}
-                    </button>
+                    <Button type="button" size="sm" onClick={() => setChangePw(true)}>
+                      {t("erd.db.password.change")}
+                    </Button>
                   </div>
                 ) : (
                   <PasswordField
@@ -463,7 +458,7 @@ export function DbConnectionModal({
               </div>
               {/* 계정 한 줄에 걸리는 두 가지(키체인 저장·읽기 전용 권장)를 한 줄로 모은다 —
                   칸마다 힌트를 달면 줄 높이가 제각각이 되고 끝에 뜬 힌트는 무엇의 설명인지 흐려진다 */}
-              <div className="hint sp6 db-form-hint">{t("diagrams.db.hint.account")}</div>
+              <div className="hint sp6 db-form-hint">{t("erd.db.hint.account")}</div>
             </div>
 
             {/* 연결 확인 — 예전에는 푸터 왼쪽의 외딴 버튼이었고, 성공해야 [다음]이 열린다는 걸
@@ -472,11 +467,11 @@ export function DbConnectionModal({
             <div className={`db-test ${test ? "ok" : testError ? "bad" : ""}`}>
               <div className="db-test-text">
                 {testing ? (
-                  <b>{t("diagrams.db.test.testing")}</b>
+                  <b>{t("erd.db.test.testing")}</b>
                 ) : test ? (
                   <>
-                    <b>{t("diagrams.db.test.ok")}</b>
-                    {t("diagrams.db.testOk", {
+                    <b>{t("erd.db.test.ok")}</b>
+                    {t("erd.db.testOk", {
                       server: test.server,
                       n: test.schemas.length,
                       ms: test.latency_ms,
@@ -484,28 +479,28 @@ export function DbConnectionModal({
                   </>
                 ) : testError ? (
                   <>
-                    <b>{t("diagrams.db.test.failed")}</b>
+                    <b>{t("erd.db.test.failed")}</b>
                     {testError}
                   </>
                 ) : (
                   <>
-                    <b>{t("diagrams.db.test.idle")}</b>
-                    {t("diagrams.db.test.idleHint")}
+                    <b>{t("erd.db.test.idle")}</b>
+                    {t("erd.db.test.idleHint")}
                   </>
                 )}
               </div>
-              <button
+              <Button
                 type="button"
-                className="btn btn-sm"
+                size="sm"
                 onClick={() => void runTest()}
                 disabled={!fieldsValid || testing || busy}
               >
                 {testing
-                  ? t("diagrams.db.testing")
+                  ? t("erd.db.testing")
                   : test || testError
-                    ? t("diagrams.db.test.again")
-                    : t("diagrams.db.test")}
-              </button>
+                    ? t("erd.db.test.again")
+                    : t("erd.db.test")}
+              </Button>
             </div>
             {/* Enter 로 테스트가 돌게 하는 보이지 않는 submit */}
             <button type="submit" hidden />
@@ -516,7 +511,7 @@ export function DbConnectionModal({
           <>
             <div className="db-kv" style={{ marginBottom: 12 }}>
               <span>
-                {t("diagrams.db.schemas.summary", {
+                {t("erd.db.schemas.summary", {
                   name: name.trim(),
                   host: host.trim(),
                   port,
@@ -524,14 +519,14 @@ export function DbConnectionModal({
                 })}
               </span>
               <span>·</span>
-              <span>{t("diagrams.db.schemas.readable", { n: test.schemas.length })}</span>
+              <span>{t("erd.db.schemas.readable", { n: test.schemas.length })}</span>
             </div>
             <div className="db-panel">
               <div className="db-panel-head db-schema-cols">
-                <span>{t("diagrams.db.schemas.col.schema")}</span>
+                <span>{t("erd.db.schemas.col.schema")}</span>
                 <span className="spacer" />
-                <span>{t("diagrams.db.schemas.col.label")}</span>
-                <span className="db-num-head">{t("diagrams.db.schemas.col.tables")}</span>
+                <span>{t("erd.db.schemas.col.label")}</span>
+                <span className="db-num-head">{t("erd.db.schemas.col.tables")}</span>
               </div>
               <div className="db-list">
                 {test.schemas.map((s) => {
@@ -546,7 +541,7 @@ export function DbConnectionModal({
                       <input
                         className="input db-label-input"
                         value={p?.label ?? ""}
-                        placeholder={t("diagrams.db.schemas.labelPh")}
+                        placeholder={t("erd.db.schemas.labelPh")}
                         disabled={!on}
                         onChange={(e) => setLabel(s.name, e.target.value)}
                       />
@@ -563,7 +558,7 @@ export function DbConnectionModal({
                   setIncludeAudit((v) => !v);
                   setAuditTouched(true);
                 }}
-                label={t("diagrams.db.audit.modalLabel")}
+                label={t("erd.db.audit.modalLabel")}
               />
               <span
                 onClick={() => {
@@ -571,20 +566,8 @@ export function DbConnectionModal({
                   setAuditTouched(true);
                 }}
               >
-                {t("diagrams.db.audit.modalLabel")}
+                {t("erd.db.audit.modalLabel")}
               </span>
-            </div>
-            <div className="field" style={{ marginTop: 14 }}>
-              <label>{t("diagrams.db.folder.label")}</label>
-              <div className="db-folder">
-                <Icon name="folder" size={14} />
-                <span>
-                  {rootDisplayName("diagrams")} / <b>{folderPreview}</b>
-                </span>
-                <span className="spacer" />
-                <span className="set-eyebrow">{t("diagrams.db.folder.perSchema")}</span>
-              </div>
-              <div className="hint">{t("diagrams.db.folder.hint")}</div>
             </div>
           </>
         )}
@@ -593,27 +576,27 @@ export function DbConnectionModal({
       {/* 운영 연결 첫 추가 — 한 번만 묻는다 */}
       <Modal
         open={prodConfirm}
-        title={t("diagrams.db.prod.confirmTitle")}
+        title={t("erd.db.prod.confirmTitle")}
         onClose={() => setProdConfirm(false)}
         narrow
         footer={
           <>
-            <button className="btn btn-sm" onClick={() => setProdConfirm(false)}>
+            <Button size="sm" onClick={() => setProdConfirm(false)}>
               {t("common.cancel")}
-            </button>
-            <button
-              className="btn btn-primary btn-sm"
+            </Button>
+            <Button
+              variant="primary" size="sm"
               onClick={() => {
                 setProdConfirm(false);
                 setStep("schemas");
               }}
             >
-              {t("diagrams.db.prod.confirmOk")}
-            </button>
+              {t("erd.db.prod.confirmOk")}
+            </Button>
           </>
         }
       >
-        <p style={{ margin: 0 }}>{t("diagrams.db.prod.confirmBody")}</p>
+        <p style={{ margin: 0 }}>{t("erd.db.prod.confirmBody")}</p>
       </Modal>
     </>
   );

@@ -1,12 +1,10 @@
 // 공유 프레젠테이션 컴포넌트
 
 import {
-  useCallback,
   useEffect,
-  useId,
-  useLayoutEffect,
   useRef,
   useState,
+  type ReactElement,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -14,6 +12,30 @@ import { createPortal } from "react-dom";
 import type { Confidence, ConceptStatus } from "./types";
 import { Icon, type IconName } from "./icons";
 import { dateLocale, t } from "./lib/i18n";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle, useReturnFocus } from "@/components/ui/dialog";
+import { Checkbox as CheckboxUI } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Select as SelectRoot,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Toggle } from "@/components/ui/toggle";
+import {
+  Tooltip as TooltipUI,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 /** 파일 트리 드래그 중 커서를 따라오는 오버레이(원본 행 복제본, dnd-kit DragOverlay 패턴).
  *  body 로 portal → 중첩 폴더의 overflow:hidden 을 벗어나므로 하위 뎁스에서도 안 잘린다.
@@ -158,18 +180,12 @@ export function Checkbox({
   disabled?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
+    <CheckboxUI
+      checked={checked}
+      onCheckedChange={() => onChange()}
       aria-label={label}
       disabled={disabled}
-      className={`checkbox ${checked ? "checked" : ""}`}
-      onClick={onChange}
-    >
-      {/* 항상 렌더하고 색으로 표시 — 체크 시 primary-fg, 미체크 hover 시 옅은 힌트 */}
-      <Icon name="check" size={12} />
-    </button>
+    />
   );
 }
 
@@ -226,31 +242,45 @@ export function SetInline({ children }: { children: ReactNode }) {
   return <div className="set-inline">{children}</div>;
 }
 
-/** 골라 쓰는 카드 한 장 — 라디오다(여럿 중 하나). 선택은 색이 아니라 채움/아웃라인(§3).
- *  AI 프로바이더 고르기와 온보딩이 같은 물건을 쓴다: 처음 본 모양이 설정에서도 같아야 한다. */
+/** 골라 쓰는 카드 묶음 — 라디오다(여럿 중 하나). 화살표로 고르고 Tab 은 고른 한 장에만 멈춘다.
+ *  AI 프로바이더 고르기(설정)와 온보딩이 같은 물건을 쓴다: 처음 본 모양이 설정에서도 같아야 한다. */
+export function OptionGroup({
+  value,
+  onValueChange,
+  label,
+  className,
+  children,
+}: {
+  value: string;
+  onValueChange: (v: string) => void;
+  label?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <RadioGroup value={value} onValueChange={onValueChange} aria-label={label} className={className}>
+      {children}
+    </RadioGroup>
+  );
+}
+
+/** 카드 한 장. 선택은 색이 아니라 채움/아웃라인(§3) — 고른 것 = 두꺼운 유리 + 채운 점.
+ *  고른 상태는 묶음(OptionGroup)의 값이 정하고, 모양은 `[data-state="checked"]` 가 받는다. */
 export function OptionCard({
-  selected,
+  value,
   name,
   meta,
   sub,
-  onSelect,
 }: {
-  selected: boolean;
+  value: string;
   name: string;
   /** 이름 옆 작은 글씨 (버전 등) */
   meta?: string;
   /** 아랫줄 (경로 등) */
   sub?: string;
-  onSelect: () => void;
 }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      className={`onb-card ${selected ? "selected" : ""}`}
-      onClick={onSelect}
-    >
+    <RadioGroupItem value={value} className="onb-card">
       <span className="onb-dot" />
       <span className="onb-name">{name}</span>
       {meta && <span className="onb-version">{meta}</span>}
@@ -259,7 +289,7 @@ export function OptionCard({
           {sub}
         </span>
       )}
-    </button>
+    </RadioGroupItem>
   );
 }
 
@@ -288,22 +318,14 @@ export function ConfirmDelete({
 }) {
   const [before, after] = body.split("{name}");
   return (
-    <Modal
+    <ConfirmShell
       open={open}
       title={title}
-      narrow
-      onClose={onCancel}
-      footer={
-        <>
-          <span className="spacer" />
-          <button className="btn btn-sm" onClick={onCancel}>
-            {t("common.cancel")}
-          </button>
-          <button className="btn btn-sm btn-danger-ghost" onClick={onConfirm}>
-            {t("common.delete")}
-          </button>
-        </>
-      }
+      cancelLabel={t("common.cancel")}
+      actionLabel={t("common.delete")}
+      onCancel={onCancel}
+      onAction={onConfirm}
+      spacer
     >
       <p style={{ margin: 0 }}>
         {before}
@@ -312,7 +334,7 @@ export function ConfirmDelete({
         <br />
         {t("common.irreversible")}
       </p>
-    </Modal>
+    </ConfirmShell>
   );
 }
 
@@ -372,16 +394,10 @@ export function ChoiceChip({
 }) {
   return (
     <span className={`chip chip-choice ${on ? "on" : ""}`}>
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={on}
-        className="chip-main"
-        onClick={onToggle}
-      >
+      <Toggle pressed={on} onPressedChange={() => onToggle()} className="chip-main">
         <Icon name={on ? "check" : icon} size={12} />
         <span className="chip-label">{label}</span>
-      </button>
+      </Toggle>
       {peek && (
         <Tooltip label={peek.label}>
           <button
@@ -405,52 +421,15 @@ export function Tooltip({
   label: string;
   children: ReactNode;
 }) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-
-  const place = () => {
-    const r = ref.current?.getBoundingClientRect();
-    if (r) setPos({ left: r.left + r.width / 2, top: r.bottom + 6 });
-  };
-  const show = () => {
-    timer.current = setTimeout(place, 350);
-  };
-  // 키보드 포커스는 dwell 없이 즉시 — 머무름은 마우스에만 있는 개념이다
-  const showNow = () => {
-    if (timer.current) clearTimeout(timer.current);
-    place();
-  };
-  const hide = () => {
-    if (timer.current) clearTimeout(timer.current);
-    setPos(null);
-  };
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
-
+  // 래퍼 span 이 트리거다 — 안쪽 버튼의 포커스(React onFocus 는 거품을 탄다)와 hover 를 함께 받는다.
+  // 래퍼는 레이아웃에도 쓰인다(styles.css .tip-wrap 의 flex-shrink).
   return (
-    <span
-      ref={ref}
-      className="tip-wrap"
-      onMouseEnter={show}
-      onMouseLeave={hide}
-      onMouseDown={hide}
-      onFocus={showNow}
-      onBlur={hide}
-    >
-      {children}
-      {pos &&
-        createPortal(
-          <span className="tip" style={{ left: pos.left, top: pos.top }}>
-            {label}
-          </span>,
-          document.body,
-        )}
-    </span>
+    <TooltipUI>
+      <TooltipTrigger asChild>
+        <span className="tip-wrap">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </TooltipUI>
   );
 }
 
@@ -463,6 +442,8 @@ const MODAL_FOCUSABLE =
 const MODAL_TRAPPABLE =
   'button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
+/** 모든 모달. 판과 레이어는 Radix Dialog(components/ui/dialog), 닫기 규칙은 여기서 건다.
+ *  닫기는 X, 취소, Esc 뿐이다 — 바깥(배경판)을 눌러도 닫히지 않는다(DESIGN.md §8 창 닫기). */
 export function Modal({
   open,
   title,
@@ -487,148 +468,187 @@ export function Modal({
   settings?: boolean;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const titleId = useId();
   // 이 창을 연 뒤 사용자가 직접 입력했는가 — Esc 로 닫기 전에 한 번 묻는 기준.
   // input 이벤트는 **사람이 친 것**에만 난다(React 가 value 를 바꾸는 건 안 난다). 그래서 저장값을 늦게
   // 불러와 채우는 창도 헛경보가 없고, 호출부마다 dirty 를 넘길 필요가 없다.
   const typedRef = useRef(false);
   const [askDiscard, setAskDiscard] = useState(false);
+  const returnFocus = useReturnFocus(open);
 
   useEffect(() => {
     if (!open) return;
     typedRef.current = false;
     setAskDiscard(false);
-    const box = boxRef.current;
-    if (!box) return;
-    const mark = (e: Event) => {
-      const el = e.target;
-      if (
-        el instanceof HTMLInputElement ||
-        el instanceof HTMLTextAreaElement ||
-        el instanceof HTMLSelectElement ||
-        (el instanceof HTMLElement && el.isContentEditable)
-      ) {
-        typedRef.current = true;
-      }
-    };
-    box.addEventListener("input", mark);
-    return () => box.removeEventListener("input", mark);
   }, [open]);
 
-  // 열릴 때 초기 포커스 — 확인 모달이 Esc 로 취소만 되고 Enter 로 승인이 안 되던 문제.
+  const markTyped = (e: { target: EventTarget }) => {
+    const el = e.target;
+    if (
+      el instanceof HTMLInputElement ||
+      el instanceof HTMLTextAreaElement ||
+      el instanceof HTMLSelectElement ||
+      (el instanceof HTMLElement && el.isContentEditable)
+    ) {
+      typedRef.current = true;
+    }
+  };
+
+  // 열릴 때 초기 포커스 — Radix 기본값(첫 포커스 가능 요소 = 헤더의 X)을 쓰지 않는다.
+  // 확인 모달이 Esc 로 취소만 되고 Enter 로 승인이 안 되던 문제가 있었다.
   // 입력이 있는 모달은 손대지 않는다: 이미 autoFocus 로 입력을 잡거나(이름 변경·설정),
   // 사용자가 먼저 타이핑할 자리라 버튼이 포커스를 뺏으면 안 된다.
-  // 닫힐 때는 열기 전 포커스로 되돌린다 — 안 그러면 포커스가 <body> 로 떨어져 Tab 이 문서 처음부터 시작한다.
-  useEffect(() => {
-    if (!open) return;
-    const prev = document.activeElement as HTMLElement | null;
+  // 닫힐 때 이전 포커스로 되돌리는 건 useReturnFocus 가 한다.
+  const focusInitial = (e: Event) => {
+    e.preventDefault();
     const box = boxRef.current;
-    if (box && !box.querySelector("input, textarea")) {
-      const foot = box.querySelector(".modal-foot");
-      // 파괴적 확인은 취소에 포커스를 둔다 — Enter 두 번(근육 기억)으로 지워지지 않게.
-      // 그 외에는 주 액션(primary)에 둬서 Enter=승인을 유지한다. (macOS 관례)
-      const destructive = foot?.querySelector<HTMLElement>(
-        ".btn-danger-ghost:not(:disabled)",
-      );
-      const target =
-        (destructive
-          ? foot?.querySelector<HTMLElement>(MODAL_FOCUSABLE)
-          : foot?.querySelector<HTMLElement>(".btn-primary:not(:disabled)")) ??
-        foot?.querySelector<HTMLElement>(MODAL_FOCUSABLE) ??
-        box.querySelector(".modal-body")?.querySelector<HTMLElement>(MODAL_FOCUSABLE) ??
-        box;
-      target.focus();
-    }
-    return () => prev?.focus?.();
-  }, [open]);
+    if (!box || box.querySelector("input, textarea")) return;
+    const foot = box.querySelector(".modal-foot");
+    // 파괴적 확인은 취소에 포커스를 둔다 — Enter 두 번(근육 기억)으로 지워지지 않게.
+    // 그 외에는 주 액션(primary)에 둬서 Enter=승인을 유지한다. (macOS 관례)
+    const destructive = foot?.querySelector<HTMLElement>(".btn-danger-ghost:not(:disabled)");
+    const target =
+      (destructive
+        ? foot?.querySelector<HTMLElement>(MODAL_FOCUSABLE)
+        : foot?.querySelector<HTMLElement>(".btn-primary:not(:disabled)")) ??
+      foot?.querySelector<HTMLElement>(MODAL_FOCUSABLE) ??
+      box.querySelector(".modal-body")?.querySelector<HTMLElement>(MODAL_FOCUSABLE) ??
+      box;
+    target.focus();
+  };
 
+  // Esc — 겹친 창 중 맨 위 것만 받는 건 Radix 레이어가 한다(위에 뜬 드롭다운, 확인 창, 확대 뷰어가
+  // 먼저 닫힌다). 여기서는 입력한 게 있으면 한 번 더 묻기만 한다.
+  // X 와 취소는 누른 것 자체가 뜻이라 묻지 않는다(키 하나는 실수로 눌리지만 버튼은 겨냥해야 눌린다).
+  const onEscape = (e: KeyboardEvent) => {
+    if (typedRef.current) {
+      e.preventDefault();
+      setAskDiscard(true);
+    }
+  };
+
+  // 포커스가 모달 밖으로 새지 않게 가둔다 — 뒤에 있는 화면의 버튼이 Tab 으로 잡히면 안 된다.
+  // non-modal Dialog 라 Radix 가 가두지 않는다(components/ui/dialog 머리말). 맨 위 창만 가둔다.
   useEffect(() => {
     if (!open) return;
     const h = (e: KeyboardEvent) => {
-      // 모달 위에 모달이 떠 있으면(설정 위의 로그인 창, 입력 버리기 확인 등) 맨 위 것만 키를 받는다 —
-      // 한 번의 Esc 로 아래 것까지 같이 닫히면 진행 중이던 작업이 통째로 날아가고,
-      // 아래 것이 Tab 을 가두면 포커스가 위 창을 벗어나 뒤로 빠진다
+      if (e.key !== "Tab") return;
       const overlays = document.querySelectorAll(".overlay");
       if (overlays.length > 1 && overlays[overlays.length - 1] !== boxRef.current?.parentElement) {
         return;
       }
-      // 포커스가 모달 밖으로 새지 않게 가둔다 — 뒤에 있는 화면의 버튼이 Tab 으로 잡히면 안 된다
-      if (e.key === "Tab") {
-        const box = boxRef.current;
-        if (!box) return;
-        const items = Array.from(
-          box.querySelectorAll<HTMLElement>(MODAL_TRAPPABLE),
-        ).filter((el) => el.offsetParent !== null || el === document.activeElement);
-        if (items.length === 0) return;
-        const first = items[0];
-        const last = items[items.length - 1];
-        const active = document.activeElement as HTMLElement | null;
-        if (e.shiftKey && (active === first || !box.contains(active))) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && active === last) {
-          e.preventDefault();
-          first.focus();
-        }
-        return;
-      }
-      if (e.key !== "Escape") return;
-      // 커스텀 Select 드롭다운이 열려 있으면 그쪽이 먼저 닫히도록 모달은 유지
-      if (document.querySelector(".select-menu")) return;
-      // mermaid 확대 뷰어가 위에 떠 있으면 그쪽만 닫히게 모달은 유지
-      if (document.querySelector(".mmd-zoom-overlay")) return;
-      // 입력한 게 있으면 Esc 한 번으로 버리지 않는다 — 한 번 더 묻는다. X 와 취소는 누른 것 자체가
-      // 뜻이라 묻지 않는다(키 하나는 실수로 눌리지만 버튼은 겨냥해야 눌린다).
-      if (typedRef.current) {
+      const box = boxRef.current;
+      if (!box) return;
+      const items = Array.from(box.querySelectorAll<HTMLElement>(MODAL_TRAPPABLE)).filter(
+        (el) => el.offsetParent !== null || el === document.activeElement,
+      );
+      if (items.length === 0) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && (active === first || !box.contains(active))) {
         e.preventDefault();
-        setAskDiscard(true);
-        return;
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
       }
-      onClose();
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [open, onClose]);
+  }, [open]);
 
-  if (!open) return null;
-  // body 로 portal — 호출한 자리에 그리면 `.section-wrap.hidden { display: none }` 에 걸려,
-  // ⌘1~4 로 섹션을 바꾸는 순간 모달이 **화면에서만 사라지고 state 는 열린 채** 남는다.
-  // 다른 오버레이 primitive(Tooltip·Select·TreeDragOverlay·MermaidZoom)와 규약도 맞춰진다.
-  // 바깥(배경판)을 눌러도 닫지 않는다 — 닫기는 X, 취소 버튼, Esc 뿐이다.
-  // AI 작성 지시처럼 길게 쓰던 입력이 창 밖을 한 번 잘못 누른 것으로 통째로 날아갔다.
-  // 입력칸에서 드래그로 글을 고르다 커서가 창 밖에서 떨어져도 같은 일이 난다.
-  return createPortal(
-    <div className="overlay">
-      <div
+  // body 로 portal(Radix Portal) — 호출한 자리에 그리면 `.section-wrap.hidden { display: none }` 에 걸려,
+  // ⌘1~5 로 섹션을 바꾸는 순간 모달이 **화면에서만 사라지고 state 는 열린 채** 남는다.
+  // 바깥(배경판)을 눌러도 닫지 않는다 — AI 작성 지시처럼 길게 쓰던 입력이 창 밖을 한 번 잘못 누른
+  // 것으로 통째로 날아갔다. 입력칸에서 드래그로 글을 고르다 커서가 창 밖에서 떨어져도 같은 일이 난다.
+  return (
+    <Dialog modal={false} open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent
         ref={boxRef}
-        tabIndex={-1}
-        role="dialog"
+        size={settings ? "settings" : wide ? "wide" : narrow ? "narrow" : "default"}
+        fixedHeight={!!fixedHeight}
         aria-modal="true"
-        aria-labelledby={titleId}
-        className={`modal ${wide ? "wide" : ""} ${narrow ? "narrow" : ""} ${
-          fixedHeight ? "fixed-h" : ""
-        } ${settings ? "settings" : ""}`}
+        aria-describedby={undefined}
+        onOpenAutoFocus={focusInitial}
+        onCloseAutoFocus={returnFocus}
+        onEscapeKeyDown={onEscape}
+        onInteractOutside={(e) => e.preventDefault()}
+        onInputCapture={markTyped}
       >
         <div className="modal-head">
-          <h2 id={titleId}>{title}</h2>
-          <button className="icon-btn" onClick={onClose} aria-label={t("common.close")}>
+          <DialogTitle asChild>
+            <h2>{title}</h2>
+          </DialogTitle>
+          <Button size="icon" onClick={onClose} aria-label={t("common.close")}>
             <Icon name="x" />
-          </button>
+          </Button>
         </div>
         <div className="modal-body">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
-      </div>
-      {/* 자기 자신을 한 겹 더 띄운다 — Esc 는 맨 위 창만 받으니(위 overlays 검사) 여기서 Esc 는 '계속 편집'이다 */}
-      <DiscardModal
-        open={askDiscard}
-        onKeep={() => setAskDiscard(false)}
-        onDiscard={() => {
-          setAskDiscard(false);
-          onClose();
-        }}
-      />
-    </div>,
-    document.body,
+        {/* 자기 위에 한 겹 더 띄운다 — Esc 는 맨 위 창만 받으니 여기서 Esc 는 '계속 편집'이다 */}
+        <DiscardModal
+          open={askDiscard}
+          onKeep={() => setAskDiscard(false)}
+          onDiscard={() => {
+            setAskDiscard(false);
+            onClose();
+          }}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** 확인 창 네 종(삭제, 입력 버리기, 미저장 이동, AI 결과 버리기)의 공통 판.
+ *  첫 버튼 = 안전한 쪽(Radix AlertDialog.Cancel) — 초기 포커스와 Enter 가 그쪽으로 간다.
+ *  X, 취소, Esc 는 전부 onCancel 이다. */
+function ConfirmShell({
+  open,
+  title,
+  cancelLabel,
+  actionLabel,
+  onCancel,
+  onAction,
+  spacer,
+  children,
+}: {
+  open: boolean;
+  title: string;
+  cancelLabel: string;
+  actionLabel: string;
+  onCancel: () => void;
+  onAction: () => void;
+  /** 버튼을 오른쪽으로 미는 빈칸(삭제 확인) */
+  spacer?: boolean;
+  /** 본문 한 덩어리 — 화면 낭독기가 '설명'으로 읽는다 */
+  children: ReactElement;
+}) {
+  const returnFocus = useReturnFocus(open);
+  return (
+    <AlertDialog open={open} onOpenChange={(o) => !o && onCancel()}>
+      <AlertDialogContent onCloseAutoFocus={returnFocus}>
+        <div className="modal-head">
+          <AlertDialogTitle asChild>
+            <h2>{title}</h2>
+          </AlertDialogTitle>
+          <Button size="icon" onClick={onCancel} aria-label={t("common.close")}>
+            <Icon name="x" />
+          </Button>
+        </div>
+        <div className="modal-body">
+          <AlertDialogDescription asChild>{children}</AlertDialogDescription>
+        </div>
+        <div className="modal-foot">
+          {spacer && <span className="spacer" />}
+          <AlertDialogCancel asChild>
+            <Button size="sm">{cancelLabel}</Button>
+          </AlertDialogCancel>
+          <Button variant="danger" size="sm" onClick={onAction}>
+            {actionLabel}
+          </Button>
+        </div>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -643,24 +663,16 @@ export function DiscardModal({
   onDiscard: () => void;
 }) {
   return (
-    <Modal
+    <ConfirmShell
       open={open}
       title={t("common.closeDirty.title")}
-      narrow
-      onClose={onKeep}
-      footer={
-        <>
-          <button className="btn btn-sm" onClick={onKeep}>
-            {t("common.unsaved.keep")}
-          </button>
-          <button className="btn btn-sm btn-danger-ghost" onClick={onDiscard}>
-            {t("common.closeDirty.discard")}
-          </button>
-        </>
-      }
+      cancelLabel={t("common.unsaved.keep")}
+      actionLabel={t("common.closeDirty.discard")}
+      onCancel={onKeep}
+      onAction={onDiscard}
     >
       <p>{t("common.closeDirty.body")}</p>
-    </Modal>
+    </ConfirmShell>
   );
 }
 
@@ -676,24 +688,16 @@ export function UnsavedModal({
   onDiscard: () => void;
 }) {
   return (
-    <Modal
+    <ConfirmShell
       open={open}
       title={t("common.unsaved.title")}
-      narrow
-      onClose={onKeep}
-      footer={
-        <>
-          <button className="btn btn-sm" onClick={onKeep}>
-            {t("common.unsaved.keep")}
-          </button>
-          <button className="btn btn-sm btn-danger-ghost" onClick={onDiscard}>
-            {t("common.unsaved.discard")}
-          </button>
-        </>
-      }
+      cancelLabel={t("common.unsaved.keep")}
+      actionLabel={t("common.unsaved.discard")}
+      onCancel={onKeep}
+      onAction={onDiscard}
     >
       <p style={{ margin: 0 }}>{t("common.unsaved.body")}</p>
-    </Modal>
+    </ConfirmShell>
   );
 }
 
@@ -717,21 +721,15 @@ export function DiscardAiModal({
   onDiscard: () => void;
 }) {
   return (
-    <Modal
+    <ConfirmShell
       open={open}
       title={t("common.aiDiscard.title")}
-      narrow
-      onClose={onKeep}
-      footer={
-        <>
-          <button className="btn btn-sm" onClick={onKeep}>
-            {t("common.aiDiscard.keep")}
-          </button>
-          <button className="btn btn-sm btn-danger-ghost" onClick={onDiscard}>
-            {mode === "discard" ? t("common.aiDiscard.discardOnly") : t("common.aiDiscard.discard")}
-          </button>
-        </>
+      cancelLabel={t("common.aiDiscard.keep")}
+      actionLabel={
+        mode === "discard" ? t("common.aiDiscard.discardOnly") : t("common.aiDiscard.discard")
       }
+      onCancel={onKeep}
+      onAction={onDiscard}
     >
       <p style={{ margin: 0 }}>
         {running
@@ -740,7 +738,7 @@ export function DiscardAiModal({
             ? t("common.aiDiscard.bodyDiscard")
             : t("common.aiDiscard.body")}
       </p>
-    </Modal>
+    </ConfirmShell>
   );
 }
 
@@ -757,15 +755,17 @@ export function timeAgo(ms: number): string {
 }
 
 /** 드롭다운 메뉴 배치 상수 — `.select-menu`(styles.css)와 짝을 이룬다 */
-const MENU_MAX_H = 260; // 최대 높이. 뷰포트가 좁으면 아래에서 더 줄인다
 const MENU_GAP = 6; // 트리거와 메뉴 사이 간격
-const MENU_EDGE = 10; // 뷰포트 가장자리에 남길 최소 여백
-const MENU_MIN_H = 96; // 뒤집어도 좁을 때의 바닥값(≈항목 3개) — 그 아래로는 스크롤
+const MENU_EDGE = 10; // 뷰포트(또는 모달 본문) 가장자리에 남길 최소 여백
+/** Radix Select 는 빈 문자열을 항목 값으로 받지 않는다(빈 값 = '고르지 않음' 예약).
+ *  우리 목록엔 ''(기본값으로 두기)이 실제 선택지로 있어서 안에서만 표식으로 바꿔 쓴다 */
+const EMPTY_VALUE = "\u0000empty";
+const enc = (v: string) => (v === "" ? EMPTY_VALUE : v);
 
-/** 커스텀 드롭다운 (네이티브 select 대신).
- *  메뉴는 body 로 portal + position:fixed 로 띄워, 모달 등 overflow 컨테이너에
- *  잘리거나 스크롤 높이를 밀어 레이아웃을 흔드는 문제를 원천 차단한다.
- *  아래 공간이 모자라면 위로 뒤집어(flip) 모달 푸터의 저장/닫기 같은 하단 액션을 덮지 않는다. */
+/** 커스텀 드롭다운(네이티브 select 금지). 판과 키보드는 Radix Select(components/ui/select).
+ *  - 미설정은 `placeholder` 로 — '없음' 항목을 목록에 끼워 넣지 않는다(목록엔 고를 값만)
+ *  - 모달 안에서는 메뉴가 `.modal-body` 경계를 넘지 않는다 — 넘으면 푸터의 저장/닫기를 덮는다
+ *  - 트리거는 type="button" 이다(Radix 기본값) — <form> 안에서 열 때마다 제출되던 버그(DB 연결 모달) */
 export function Select<T extends string>({
   value,
   options,
@@ -783,199 +783,35 @@ export function Select<T extends string>({
    *  '없음' 항목을 목록에 끼워 넣지 않고도 빈 상태를 표현한다 — 목록은 고를 값만 담는다. */
   placeholder?: string;
 }) {
-  const [open, setOpen] = useState(false);
-  // 키보드 이동용 활성 인덱스 — 열릴 때 현재 값에서 시작한다
-  const [active, setActive] = useState(0);
-  const [pos, setPos] = useState<{
-    top?: number;
-    bottom?: number;
-    left?: number;
-    right?: number;
-    minWidth: number;
-    maxHeight: number;
-  } | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const listId = useId();
-
-  const place = useCallback(() => {
-    const el = triggerRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    // 메뉴가 벗어나면 안 되는 경계. 모달 안이면 '모달 본문' — 뷰포트 기준으로 재면 화면엔 들어가도
-    // 푸터의 저장/닫기를 덮어버린다. 모달 밖이면 뷰포트.
-    const host = el.closest(".modal-body")?.getBoundingClientRect();
-    const limitTop = Math.max(MENU_EDGE, host?.top ?? 0);
-    const limitBottom = Math.min(
-      window.innerHeight - MENU_EDGE,
-      host?.bottom ?? window.innerHeight,
-    );
-    const roomBelow = limitBottom - r.bottom - MENU_GAP;
-    const roomAbove = r.top - limitTop - MENU_GAP;
-    // 실제 내용 높이로 판단(메뉴는 open 과 동시에 마운트되므로 measure 가능).
-    // 아직 못 쟀으면 최대치로 가정해 보수적으로 뒤집는다.
-    const need = Math.min(menuRef.current?.scrollHeight || MENU_MAX_H, MENU_MAX_H);
-    // 아래가 모자라고 위가 더 넓을 때만 뒤집는다 — 공간이 되면 늘 아래(예측 가능한 기본값)
-    const up = roomBelow < need && roomAbove > roomBelow;
-    setPos({
-      ...(align === "right"
-        ? { right: window.innerWidth - r.right }
-        : { left: r.left }),
-      ...(up
-        ? { bottom: window.innerHeight - r.top + MENU_GAP }
-        : { top: r.bottom + MENU_GAP }),
-      minWidth: r.width,
-      maxHeight: Math.max(MENU_MIN_H, Math.min(MENU_MAX_H, up ? roomAbove : roomBelow)),
-    });
-  }, [align]);
-
-  // 배치는 paint 전에 끝낸다 — 잘못된 위치가 한 프레임 보이지 않게
-  useLayoutEffect(() => {
-    if (open) place();
-  }, [open, place]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (rootRef.current?.contains(t) || menuRef.current?.contains(t)) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || e.key === "Tab") {
-        setOpen(false);
-        if (e.key === "Escape") triggerRef.current?.focus();
-        return;
-      }
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        setActive((i) => {
-          const n = options.length;
-          return n === 0 ? 0 : (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
-        });
-        return;
-      }
-      if (e.key === "Home" || e.key === "End") {
-        e.preventDefault();
-        setActive(e.key === "Home" ? 0 : options.length - 1);
-        return;
-      }
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        const o = options[active];
-        if (o) onChange(o.value);
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    const onReflow = () => setOpen(false);
-    // 드롭다운 '내부' 스크롤(긴 목록)은 닫지 않는다 — 바깥(모달 본문 등) 스크롤에만 닫아 앵커 이탈 방지
-    const onScroll = (e: Event) => {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("resize", onReflow);
-    window.addEventListener("scroll", onScroll, true);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("resize", onReflow);
-      window.removeEventListener("scroll", onScroll, true);
-    };
-  }, [open, options, active, onChange]);
-
+  const [boundary, setBoundary] = useState<Element | null>(null);
   const cur = options.find((o) => o.value === value);
 
-  // 활성 항목이 보이게 스크롤 — 목록이 길면 화살표로 내려가다 시야를 벗어난다
-  useEffect(() => {
-    if (!open) return;
-    menuRef.current
-      ?.querySelectorAll<HTMLElement>(".select-item")
-      [active]?.scrollIntoView({ block: "nearest" });
-  }, [open, active]);
-
-  const openMenu = () => {
-    setActive(Math.max(0, options.findIndex((o) => o.value === value)));
-    setOpen(true);
-  };
-
   return (
-    <div className={`select ${block ? "block" : ""}`} ref={rootRef}>
-      {/* type="button" — <form> 안에서 쓰이면 기본값(submit)이라 열 때마다 폼이 제출된다(DB 연결 모달에서 실측) */}
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`select-trigger ${cur ? "" : "select-empty"}`}
-        role="combobox"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-controls={open ? listId : undefined}
-        onClick={() => (open ? setOpen(false) : openMenu())}
-        onKeyDown={(e) => {
-          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
-            e.preventDefault();
-            openMenu();
-          }
+    <div className={`select ${block ? "block" : ""}`}>
+      <SelectRoot
+        value={cur ? enc(cur.value) : ""}
+        onValueChange={(v) => onChange((v === EMPTY_VALUE ? "" : v) as T)}
+        onOpenChange={(o) => {
+          if (o) setBoundary(triggerRef.current?.closest(".modal-body") ?? null);
         }}
       >
-        <span>{cur?.label ?? placeholder}</span>
-        <svg className="select-caret" width="10" height="6" viewBox="0 0 10 6">
-          <path
-            d="M1 1l4 4 4-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
-      {open &&
-        createPortal(
-          // pos 계산(useLayoutEffect) 전 한 프레임은 숨긴다 — 측정용으로 마운트만 해둔 상태
-          <div
-            ref={menuRef}
-            id={listId}
-            role="listbox"
-            className="select-menu"
-            style={{
-              top: pos?.top,
-              bottom: pos?.bottom,
-              left: pos?.left,
-              right: pos?.right,
-              minWidth: pos?.minWidth,
-              maxHeight: pos?.maxHeight,
-              visibility: pos ? undefined : "hidden",
-            }}
-          >
-            {options.map((o, i) => (
-              <button
-                key={o.value}
-                type="button"
-                role="option"
-                aria-selected={o.value === value}
-                className={`select-item ${o.value === value ? "active" : ""} ${
-                  i === active ? "kbd-active" : ""
-                }`}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => {
-                  onChange(o.value);
-                  setOpen(false);
-                  triggerRef.current?.focus();
-                }}
-              >
-                <span className="select-check">
-                  {o.value === value && <Icon name="check" size={12} />}
-                </span>
-                {o.label}
-              </button>
-            ))}
-          </div>,
-          document.body,
-        )}
+        <SelectTrigger ref={triggerRef} className={cur ? "" : "select-empty"}>
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent
+          align={align === "right" ? "end" : "start"}
+          sideOffset={MENU_GAP}
+          collisionPadding={MENU_EDGE}
+          collisionBoundary={boundary}
+        >
+          {options.map((o) => (
+            <SelectItem key={o.value} value={enc(o.value)}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </SelectRoot>
     </div>
   );
 }
