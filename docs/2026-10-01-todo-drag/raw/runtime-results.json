@@ -1,0 +1,36 @@
+{
+  "environment": "macOS 설치 앱, Tauri release 번들",
+  "fixture_date": "2026-10-02",
+  "fixture_rows": 54,
+  "upward_root_order": [
+    "B",
+    "A",
+    "C"
+  ],
+  "downward_root_order": [
+    "A",
+    "C",
+    "B"
+  ],
+  "child_drop": {
+    "item": "B",
+    "parent": "C"
+  },
+  "group_root_order": [
+    "묶음",
+    "A",
+    "C",
+    "B"
+  ],
+  "group_children": 20,
+  "scrolled_tail_order": [
+    "목록 27",
+    "목록 28",
+    "목록 30",
+    "목록 29"
+  ],
+  "fixture_removed": 54,
+  "unchanged_tables": 13,
+  "changed_tables": [],
+  "evidence": "실제 드롭별 SQLite 조회 결과에서 임시 항목명과 순서를 추출한 요약; 원본 조회 자료는 로컬 보관"
+}
