@@ -10,7 +10,8 @@ DB 스키마 ERD, AI 데일리/주간 리포트를 한 곳에서 다룹니다. �
 
 - macOS, Xcode Command Line Tools
 - Rust 툴체인 ([rustup](https://rustup.rs))
-- Node.js 20 이상, [pnpm](https://pnpm.io)
+- Node.js 20 이상 (빌드 스크립트 실행용)
+- 선택, 테스트: [pnpm](https://pnpm.io)
 - 선택, AI 기능: [Claude Code](https://claude.com/claude-code) 또는 [Codex CLI](https://developers.openai.com/codex) 설치 후 로그인
 - 선택, 리포트: [`gh`](https://cli.github.com) 로그인
 - 선택, DB 동기화: `information_schema` 를 읽을 수 있는 MySQL 계정
@@ -20,23 +21,23 @@ DB 스키마 ERD, AI 데일리/주간 리포트를 한 곳에서 다룹니다. �
 ```bash
 xcode-select --install                                          # clang, git
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # rustc, cargo (stable)
-corepack enable && corepack prepare pnpm@latest --activate      # pnpm (또는 brew install pnpm)
+corepack enable && corepack prepare pnpm@latest --activate      # pnpm, 테스트를 돌릴 때만 (또는 brew install pnpm)
 ```
 
-설치가 끝나면 터미널을 새로 열어야 `cargo` 가 `PATH` 에 잡힙니다. Tauri CLI 는 dev 의존성이라
-`pnpm install` 이 같이 받아 옵니다. 따로 전역 설치할 것은 없습니다.
+설치가 끝나면 터미널을 새로 열어야 `cargo` 가 `PATH` 에 잡힙니다. 앱은 `gpui/` 의 Rust(GPUI) 로
+빌드하고, 필요한 Rust 버전은 `gpui/rust-toolchain.toml` 에 고정돼 있어 첫 빌드 때 rustup 이 알아서
+받습니다. 따로 전역 설치할 것은 없습니다.
 
 ## 2. 빌드하고 설치
 
 ```bash
 git clone https://github.com/junhyoung-kim-dev/amber && cd amber
-pnpm install
-pnpm tauri build --bundles app
-ditto src-tauri/target/release/bundle/macos/Amber.app /Applications/Amber.app
+node scripts/build-app.mjs
+ditto gpui/target/release/bundle/Amber.app /Applications/Amber.app
 ```
 
-- 첫 빌드는 Rust 쪽을 컴파일하느라 몇 분 걸립니다.
-- `--bundles app` 은 `.dmg` 없이 `.app` 만 만듭니다.
+- `build-app.mjs` 가 GPUI 앱을 릴리스로 빌드해 `Amber.app` 으로 묶고 ad-hoc 서명까지 합니다.
+- 첫 빌드는 Rust 의존성을 전부 컴파일하느라 몇 분 넘게 걸립니다.
 - 내 Mac 에서 직접 빌드한 앱은 격리 표시가 붙지 않아서, 서명이 없어도 Gatekeeper 경고 없이 열립니다.
 
 ## 3. 첫 실행 세팅
@@ -62,15 +63,18 @@ ditto src-tauri/target/release/bundle/macos/Amber.app /Applications/Amber.app
 
 ```bash
 git pull
-pnpm install
-pnpm tauri build --bundles app
+node scripts/build-app.mjs
 ```
 
-Amber 를 종료(`⌘Q`)한 뒤 앱을 바꿔 끼웁니다.
+Amber 를 종료(`⌘Q`)한 뒤 앱을 바꿔 끼웁니다. 창을 닫기만 하면 앱이 메뉴 막대에 남아 있으니
+`⌘Q` 나 메뉴 막대 아이콘의 종료로 끕니다.
 
 ```bash
-rm -rf /Applications/Amber.app && ditto src-tauri/target/release/bundle/macos/Amber.app /Applications/Amber.app
+rm -rf /Applications/Amber.app && ditto gpui/target/release/bundle/Amber.app /Applications/Amber.app
 ```
+
+예전에 `pnpm tauri build` 로 만든 앱을 쓰고 있었어도 같은 데이터 폴더를 쓰기 때문에 할 일, 노트,
+설정, 창 자리가 그대로 이어집니다.
 
 ## 데이터 위치
 
@@ -86,11 +90,13 @@ rm -rf /Applications/Amber.app && ditto src-tauri/target/release/bundle/macos/Am
 ## 개발 실행
 
 ```bash
-pnpm tauri dev      # 핫 리로드 개발 빌드
-pnpm test           # vitest + cargo test
+(cd gpui && cargo run --bin amber-gpui)   # 개발 빌드 실행
+(cd gpui && cargo test)                   # GPUI 테스트 (화면 조작 시험대 포함)
+pnpm install && pnpm test                 # 전체 테스트 (vitest + cargo)
 ```
 
-개발 빌드는 설치된 앱과 같은 데이터 폴더를 씁니다. 둘을 동시에 띄우지 마세요.
+`cargo` 는 `gpui/` 안에서 돌려야 고정한 Rust 버전을 씁니다. 개발 빌드는 설치된 앱과 같은 데이터
+폴더를 씁니다. 둘을 동시에 띄우지 마세요.
 
 ## 라이선스
 
