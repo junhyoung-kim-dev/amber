@@ -27,6 +27,7 @@ import {
 } from "../lib/reportRun";
 import { todayStr } from "../lib/date";
 import { Markdown } from "./Markdown";
+import { SelectionPaint } from "./GlyphPaint";
 import { AiThinking, Modal, Tooltip, UnsavedModal } from "../ui";
 import { Icon } from "../icons";
 import { t, dateLocale } from "../lib/i18n";
@@ -81,6 +82,7 @@ export function DailyReportPanel({
   const srcRef = useRef<HTMLTextAreaElement | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
   useScrollSync(srcRef, previewRef, editing, draft);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const isFuture = date > todayStr();
 
@@ -400,15 +402,17 @@ export function DailyReportPanel({
                   spellCheck={false}
                   autoFocus
                 />
-                <div className="markdown note-preview report-body" ref={previewRef}>
+                <div className="markdown note-preview report-body glyph-sel" ref={previewRef}>
                   <Markdown>{draft}</Markdown>
+                  <SelectionPaint containerRef={previewRef} />
                 </div>
               </div>
               <p className="report-hint">{t("report.editHint")}</p>
             </>
           ) : (
-            <div className="markdown report-body">
+            <div className="markdown report-body glyph-sel" ref={bodyRef}>
               <Markdown>{body}</Markdown>
+              <SelectionPaint containerRef={bodyRef} />
             </div>
           )}
         </>

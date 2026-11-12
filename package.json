@@ -1,18 +1,20 @@
 {
   "name": "amber",
   "private": true,
-  "version": "0.23.1",
+  "version": "0.24.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "pnpm test:ts && cargo test --manifest-path src-tauri/Cargo.toml",
+    "test": "pnpm test:ts && cargo test --manifest-path src-tauri/Cargo.toml && cargo test --manifest-path core/Cargo.toml && (cd gpui && cargo test)",
     "tauri": "tauri",
-    "test:ts": "vitest run"
+    "test:ts": "vitest run",
+    "parity": "vitest run parity",
+    "parity:record": "PARITY_RECORD=1 vitest run parity/parity.test.ts"
   },
   "dependencies": {
-    "@jhzlo/resin": "0.2.0",
+    "@jhzlo/resin": "0.2.7",
     "@mermaid-js/layout-elk": "^0.2.2",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/api": "^2",

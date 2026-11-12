@@ -103,6 +103,7 @@ const ko = {
   "common.err.db.unsupported": "지원하지 않는 DB 종류예요 — {detail}",
   "common.err.db.emptyField": "호스트·사용자·스키마 이름을 확인해 주세요.",
   "common.err.db.emptyPassword": "비밀번호를 입력해 주세요.",
+  "common.err.db.credential": "계정 명령이 실패했어요 — {detail}",
   "common.err.keychain.denied": "macOS 키체인에 접근하지 못했어요 — {detail}",
   "common.err.keychain.missing":
     "저장된 비밀번호가 없어요. 연결 설정에서 비밀번호를 다시 입력해 주세요.",
@@ -113,6 +114,15 @@ const ko = {
   "common.alert.important": "중요",
   "common.alert.warning": "주의",
   "common.alert.caution": "경고",
+
+  // 마크다운 토글(`<details>`) — 제목이 없을 때의 이름과 머리에 흐리게 적는 '안에 든 것'
+  "common.toggle.untitled": "자세히",
+  "common.toggle.paragraph": "문단 {n}",
+  "common.toggle.list": "목록 {n}",
+  "common.toggle.code": "코드 {n}",
+  "common.toggle.figure": "그림 {n}",
+  "common.toggle.table": "표 {n}",
+  "common.toggle.toggle": "토글 {n}",
 
   // 페이지 내 검색(⌘F) — 필기노트·개념·투두 공용 (components/PageFind.tsx)
   "common.find.ph": "이 화면에서 찾기",
@@ -248,6 +258,7 @@ const en: Record<keyof typeof ko, string> = {
   "common.err.db.unsupported": "Unsupported database kind — {detail}",
   "common.err.db.emptyField": "Check the host, user, and schema name.",
   "common.err.db.emptyPassword": "Enter a password.",
+  "common.err.db.credential": "The credential command failed — {detail}",
   "common.err.keychain.denied": "Couldn't access the macOS Keychain — {detail}",
   "common.err.keychain.missing":
     "No saved password. Enter the password again in the connection settings.",
@@ -257,6 +268,14 @@ const en: Record<keyof typeof ko, string> = {
   "common.alert.important": "Important",
   "common.alert.warning": "Warning",
   "common.alert.caution": "Caution",
+
+  "common.toggle.untitled": "Details",
+  "common.toggle.paragraph": "Text {n}",
+  "common.toggle.list": "List {n}",
+  "common.toggle.code": "Code {n}",
+  "common.toggle.figure": "Figure {n}",
+  "common.toggle.table": "Table {n}",
+  "common.toggle.toggle": "Toggle {n}",
 
   "common.find.ph": "Find on this screen",
   "common.find.treePh": "Find in tree, including collapsed folders",

@@ -4,12 +4,14 @@
 //
 // 조작 규약(resin 과 같다): 휠 = 포인터 중심 확대, 드래그 = 이동, 더블클릭 = 맞춤. 표 이름 = 패널, 컬럼 = 정보창,
 // 표 몸통 = 초점만, 빈 곳 = 정보창 닫고 초점은 패널의 표로. 패널은 X 와 Esc 로만 닫힌다.
+// ⌘F 는 그려진 표와 컬럼의 이름에서 찾는다(트리에 포커스가 있으면 트리 찾기가 먼저 받는다).
 
 import { useEffect, useRef, useState } from "react";
-import type { Model } from "@jhzlo/resin";
+import { CARD_PARTS, type CardPart, type Model } from "@jhzlo/resin";
 import {
   CANVAS_STAGES,
   Canvas,
+  cardParts,
   columnDetails,
   tableDetails,
   type CanvasHit,
@@ -23,12 +25,17 @@ import { t } from "../lib/i18n";
 import { errText } from "../lib/errors";
 import { Icon } from "../icons";
 import { Spinner, Tooltip } from "../ui";
+import { SelectionPaint } from "./GlyphPaint";
 
 type Columns = "all" | "keys" | "none";
 interface ViewPrefs {
   columns: Columns;
   audit: "collapse" | "expand";
   edges: "angular" | "curved";
+  /** 세로(위에서 아래, 선이 카드 위아래에 붙는다) 또는 가로(resin 기본, 선이 컬럼 행에 붙는다) */
+  direction: "down" | "right";
+  /** 카드 행에서 뺄 부분(키 라벨, 태그, 설명, 타입, NULL). 그리기는 resin 이 한다 */
+  hide: CardPart[];
   grid: boolean;
   stage: CanvasStage;
 }
@@ -36,7 +43,7 @@ interface ViewPrefs {
 const VIEW_KEY = "amber.erd.view";
 const PANEL_KEY = "amber.erd.panel";
 const PANEL_MIN = 360;
-const DEFAULT_VIEW: ViewPrefs = { columns: "all", audit: "collapse", edges: "angular", grid: true, stage: "aurora" };
+const DEFAULT_VIEW: ViewPrefs = { columns: "all", audit: "collapse", edges: "angular", direction: "down", hide: [], grid: true, stage: "aurora" };
 /** 다시 그리지 않고 되살릴 그림 — 스키마를 오갈 때. 개수와 DOM 노드 수 둘 다로 묶는다(플레이그라운드와 같은 값) */
 const KEEP_DRAWINGS = 4;
 const KEEP_NODES = 100_000;
@@ -48,6 +55,8 @@ function loadView(): ViewPrefs {
       columns: v.columns === "keys" || v.columns === "none" ? v.columns : "all",
       audit: v.audit === "expand" ? "expand" : "collapse",
       edges: v.edges === "curved" ? "curved" : "angular",
+      direction: v.direction === "right" ? "right" : "down",
+      hide: Array.isArray(v.hide) ? CARD_PARTS.filter((p) => v.hide!.includes(p)) : [],
       grid: v.grid !== false,
       stage: v.stage && CANVAS_STAGES.includes(v.stage) ? v.stage : DEFAULT_VIEW.stage,
     };
@@ -85,6 +94,7 @@ export function ErdCanvas({
   const panelRef = useRef<HTMLElement>(null);
   const panelBodyRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
+  const popBodyRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<Canvas | null>(null);
 
   const [view, setView] = useState<ViewPrefs>(loadView);
@@ -97,19 +107,36 @@ export function ErdCanvas({
   const [panelWidth, setPanelWidth] = useState(loadPanelWidth);
   // 패널 옆에 남은 캔버스 폭 — 좁으면 배경 고르기가 글자를 접고, 더 좁으면 비켜선다(플레이그라운드와 같은 문턱)
   const [room, setRoom] = useState<"" | "snug" | "tight">("");
+  // 좌상단 [보기] 판 — 행, 항목, 그리기를 한곳에 모은다
+  const [viewOpen, setViewOpen] = useState(false);
+  const viewPanelRef = useRef<HTMLDivElement>(null);
+  const partsRef = useRef<HTMLDivElement>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findIdx, setFindIdx] = useState(0);
+  const [findCount, setFindCount] = useState(0);
+  // 찾기 바가 좌상단 보기 조작과 부딪히면 그 아래 줄로 내려간다(패널이 열려 폭이 줄 때)
+  const [findLow, setFindLow] = useState(false);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const findBarRef = useRef<HTMLDivElement>(null);
+  const viewFloatRef = useRef<HTMLDivElement>(null);
+  const findHits = useRef<Element[]>([]);
+  /** 찾느라 초점 흐림을 걷었는가 — 찾기를 비우거나 닫을 때 한 번만 되돌린다 */
+  const findCleared = useRef(false);
 
   const mounted = useRef(new Map<string, MountedDrawing>());
   const shownKey = useRef("");
   const shownDrawing = useRef<MountedDrawing | null>(null);
   const shownId = useRef("");
+  const shownDirection = useRef("");
   const renderSeq = useRef(0);
   /** 그림이 바뀐 뒤 할 일 — 숨은 컬럼을 고르면 컬럼을 펼쳐 다시 그린 다음 정보창을 연다 */
   const afterDraw = useRef<(() => void) | null>(null);
   const popFrame = useRef(0);
 
   // 콜백이 늘 지금 상태를 보게 한다 — Canvas 는 한 번 만들어 계속 쓰므로 생성 때의 클로저에 갇히면 안 된다
-  const live = useRef({ model, inspected, popped, view });
-  live.current = { model, inspected, popped, view };
+  const live = useRef({ model, inspected, popped, view, viewOpen, find: findOpen ? findQuery : "" });
+  live.current = { model, inspected, popped, view, viewOpen, find: findOpen ? findQuery : "" };
 
   const covered = () => panelRef.current?.offsetWidth ?? 0;
 
@@ -177,6 +204,75 @@ export function ErdCanvas({
     c.refresh();
     setPopped({ table, column });
     requestAnimationFrame(() => c.revealElement(c.row(table, column), covered()));
+  }
+
+  /** 찾기 — 그려진 표 이름(머리글)과 컬럼 이름에서. 칠하는 건 resin 이 행마다 깔아 둔 판(.rz-hit)이라
+   *  그림은 그대로다. `move` 가 거짓이면 다시 칠하기만 한다(그림을 새로 올렸을 때) */
+  function runFind(q: string, move = true) {
+    const root = viewportRef.current;
+    if (!root) return;
+    for (const el of Array.from(root.querySelectorAll(".erd-find-hit"))) el.classList.remove("erd-find-hit", "erd-find-cur");
+    const term = q.trim().toLowerCase();
+    const hits: Element[] = [];
+    if (term) {
+      for (const card of Array.from(root.querySelectorAll<SVGGElement>(".rz-t[data-t]"))) {
+        const head = card.querySelector(".rz-head");
+        if (head && card.dataset.t!.toLowerCase().includes(term)) hits.push(head);
+        for (const row of Array.from(card.querySelectorAll<SVGGElement>(".rz-c[data-c]")))
+          if (row.dataset.c!.toLowerCase().includes(term)) hits.push(row);
+      }
+    }
+    for (const el of hits) el.classList.add("erd-find-hit");
+    findHits.current = hits;
+    setFindCount(hits.length);
+    setFindIdx(0);
+    if (hits.length) markFind(0, move);
+    if (term) liftFocus();
+    else if (findCleared.current) {
+      findCleared.current = false;
+      restoreFocus();
+    }
+  }
+
+  /** 찾는 동안은 초점 흐림을 걷는다 — 흐려진 표에 걸린 결과도 보여야 한다. 비우거나 닫으면 되돌린다 */
+  function liftFocus() {
+    const c = canvasRef.current;
+    c?.focus?.clear();
+    c?.refresh(true);
+    findCleared.current = true;
+  }
+
+  /** 패널과 정보창이 가리키는 것으로 초점을 되돌린다 */
+  function restoreFocus() {
+    const c = canvasRef.current;
+    const pop = live.current.popped;
+    if (pop && c?.row(pop.table, pop.column)) c.focus?.row(pop.table, pop.column);
+    else settleFocus();
+    c?.refresh(true);
+  }
+
+  /** 키보드(입력, Enter)로 옮길 때는 움직이지 않고 바로 간다(DESIGN: 키보드 동작에 애니메이션 없음) */
+  function markFind(i: number, move = true, animate = false) {
+    const hits = findHits.current;
+    for (const el of hits) el.classList.remove("erd-find-cur");
+    hits[i]?.classList.add("erd-find-cur");
+    if (move) canvasRef.current?.revealElement(hits[i] ?? null, covered(), animate);
+  }
+
+  function stepFind(delta: number, animate = false) {
+    const n = findHits.current.length;
+    if (!n) return;
+    const next = (((findIdx + delta) % n) + n) % n;
+    setFindIdx(next);
+    // 찾는 사이 표를 눌러 다시 흐려졌을 수 있다
+    liftFocus();
+    markFind(next, true, animate);
+  }
+
+  function closeFind() {
+    setFindOpen(false);
+    setFindQuery("");
+    runFind("", false);
   }
 
   const tap = useRef<(hit: CanvasHit) => void>(() => {});
@@ -254,8 +350,9 @@ export function ErdCanvas({
       return;
     }
     const ink = c.drawOptions();
-    const key = JSON.stringify([drawingId, view.columns, view.audit, view.edges, ink.look, ink.stage]);
-    const fit = shownId.current !== drawingId;
+    const key = JSON.stringify([drawingId, view.columns, view.audit, view.edges, view.direction, view.hide, ink.look, ink.stage]);
+    // 다른 스키마이거나 방향이 바뀌면 그림이 통째로 달라진다 — 보던 자리가 뜻을 잃으니 화면에 맞춘다
+    const fit = shownId.current !== drawingId || shownDirection.current !== view.direction;
     if (key === shownKey.current) {
       // 앞선 그리기를 이 그림으로 되돌렸다 — 그 그리기는 seq 가 어긋나 스스로 끄지 않으니 여기서 끈다
       setBusy(false);
@@ -276,6 +373,8 @@ export function ErdCanvas({
             columns: view.columns,
             audit: view.audit,
             edges: view.edges,
+            direction: view.direction,
+            hide: view.hide,
             idPrefix: "erd-",
           }));
         if (seq !== renderSeq.current) return;
@@ -295,6 +394,7 @@ export function ErdCanvas({
         shownDrawing.current = c.show(drawing, fit);
         shownKey.current = key;
         shownId.current = drawingId;
+        shownDirection.current = view.direction;
         // 열려 있던 것을 새 그림에서 다시 잡는다
         const { inspected: open, popped: pop } = live.current;
         if (pop && c.row(pop.table, pop.column)) c.focus?.row(pop.table, pop.column);
@@ -302,6 +402,8 @@ export function ErdCanvas({
           if (pop) setPopped(null);
           if (open) c.focusTable(open);
         }
+        // 찾기를 새 그림에 다시 칠한다(찾는 중이면 위의 초점을 다시 걷는다). 되살린 그림에 남은 지난 칠도 여기서 걷힌다
+        runFind(live.current.find, false);
         c.refresh(true);
         const next = afterDraw.current;
         afterDraw.current = null;
@@ -342,10 +444,10 @@ export function ErdCanvas({
 
   // 정보창 — resin 의 컬럼 설명
   useEffect(() => {
-    const pop = popRef.current;
-    if (!pop) return;
+    const body = popBodyRef.current;
+    if (!body) return;
     if (!model || !popped) {
-      pop.replaceChildren();
+      body.replaceChildren();
       return;
     }
     const el = columnDetails(model, popped.table, popped.column, (name) => openTable(name));
@@ -353,7 +455,7 @@ export function ErdCanvas({
       setPopped(null);
       return;
     }
-    pop.replaceChildren(el);
+    body.replaceChildren(el);
     placePop();
   }, [model, popped]);
 
@@ -365,19 +467,31 @@ export function ErdCanvas({
     const measure = () => {
       const free = wrap.clientWidth - covered();
       setRoom(free < 350 ? "tight" : free < 560 ? "snug" : "");
+      const tl = viewFloatRef.current;
+      const bar = findBarRef.current;
+      setFindLow(!!tl && !!bar && tl.offsetLeft + tl.offsetWidth + 8 > free - 10 - bar.offsetWidth);
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(wrap);
+    // [보기] 버튼은 요약 글자만큼 폭이 바뀐다
+    if (viewFloatRef.current) ro.observe(viewFloatRef.current);
     return () => ro.disconnect();
-  }, [panelWidth, inspected]);
+  }, [panelWidth, inspected, findOpen]);
 
-  // Esc — 안쪽부터: 정보창, 그다음 패널
+  // Esc — 안쪽부터: [보기] 판, 정보창, 그다음 패널
   useEffect(() => {
     if (!active) return;
     const h = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || document.querySelector(".overlay")) return;
-      const { popped: pop, inspected: open } = live.current;
+      const { popped: pop, inspected: open, viewOpen: menu } = live.current;
+      if (menu) {
+        // 판 안에서 닫으면 포커스를 [보기] 버튼으로 돌린다
+        if (viewPanelRef.current?.contains(document.activeElement)) viewFloatRef.current?.querySelector("button")?.focus();
+        setViewOpen(false);
+        e.preventDefault();
+        return;
+      }
       if (pop) {
         setPopped(null);
         settleFocus();
@@ -391,6 +505,51 @@ export function ErdCanvas({
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [active]);
+
+  // ⌘F — 탭이 보일 때만. 트리에 포커스가 있으면 트리 찾기가 먼저 받고 막는다(TreeFind). 탭을 떠나면 닫는다
+  useEffect(() => {
+    if (!active) {
+      closeFind();
+      return;
+    }
+    const h = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.key.toLowerCase() !== "f") return;
+      if (document.querySelector(".overlay, .mmd-zoom-overlay")) return;
+      e.preventDefault();
+      setFindOpen(true);
+      requestAnimationFrame(() => findInputRef.current?.select());
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [active]);
+
+  // [보기] 판의 항목 칸 — resin 의 견본 행(cardParts)을 그대로 넣는다. 누른 부분을 카드에서 빼거나 되돌린다.
+  // 이름만 보기에서는 잠근다(키보드로 눌러도 바뀌지 않게). 다시 만들 때 키보드 포커스는 같은 부분에 남긴다
+  useEffect(() => {
+    const box = partsRef.current;
+    if (!box) return;
+    const focused = box.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.part : undefined;
+    box.replaceChildren(
+      cardParts(new Set(view.hide), (part) =>
+        setView((v) => (v.columns === "none" ? v : { ...v, hide: CARD_PARTS.filter((p) => (p === part) !== v.hide.includes(p)) })),
+      ),
+    );
+    if (focused) box.querySelector<HTMLElement>(`[data-part="${focused}"]`)?.focus();
+  }, [viewOpen, view.hide]);
+
+  // [보기] 판은 드롭다운이라 바깥을 누르면 닫힌다(DESIGN §8 의 예외). 탭을 떠나도 닫는다
+  useEffect(() => {
+    if (!active) setViewOpen(false);
+  }, [active]);
+  useEffect(() => {
+    if (!viewOpen) return;
+    const h = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (!viewPanelRef.current?.contains(target) && !viewFloatRef.current?.contains(target)) setViewOpen(false);
+    };
+    document.addEventListener("pointerdown", h);
+    return () => document.removeEventListener("pointerdown", h);
+  }, [viewOpen]);
 
   // 패널 왼쪽 가장자리를 끌어 폭을 바꾼다
   function startResize(e: React.PointerEvent<HTMLDivElement>) {
@@ -428,46 +587,74 @@ export function ErdCanvas({
     { id: "keys", label: t("erd.canvas.columns.keys"), hint: t("erd.canvas.columns.keysHint") },
     { id: "none", label: t("erd.canvas.columns.none"), hint: t("erd.canvas.columns.noneHint") },
   ];
+  // 판을 닫아 두어도 지금 보기가 읽히게 — 행, 방향, 그리고 뺀 항목이 있으면 그 수
+  const shownParts = CARD_PARTS.length - view.hide.length;
+  const summary = [
+    COLUMN_LEVELS.find((c) => c.id === view.columns)!.label,
+    t(view.direction === "down" ? "erd.canvas.direction.down" : "erd.canvas.direction.right"),
+    shownParts < CARD_PARTS.length ? t("erd.canvas.partsCount", { n: shownParts, total: CARD_PARTS.length }) : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <div className="erd-stage" ref={wrapRef} data-room={room || undefined}>
       <div className="erd-viewport" ref={viewportRef} />
 
-      {/* 좌상단 — 무엇을 그리나. 고른 쪽만 채운다(§3) */}
-      <div className="erd-float erd-float-tl" role="group" aria-label={t("erd.canvas.view")}>
-        {COLUMN_LEVELS.map((c) => (
-          <Tooltip key={c.id} label={c.hint}>
-            <button
-              className={`erd-float-btn ${view.columns === c.id ? "on" : ""}`}
-              aria-pressed={view.columns === c.id}
-              onClick={() => set({ columns: c.id })}
-            >
-              {c.label}
-            </button>
-          </Tooltip>
-        ))}
-        <span className="erd-float-sep" aria-hidden="true" />
-        <Tooltip label={t("erd.canvas.auditHint")}>
-          <button
-            className={`erd-float-btn ${view.audit === "expand" ? "on" : ""}`}
-            aria-pressed={view.audit === "expand"}
-            onClick={() => set({ audit: view.audit === "expand" ? "collapse" : "expand" })}
-          >
-            {t("erd.canvas.audit")}
-          </button>
-        </Tooltip>
-        <span className="erd-float-sep" aria-hidden="true" />
-        {(["angular", "curved"] as const).map((e) => (
-          <button
-            key={e}
-            className={`erd-float-btn ${view.edges === e ? "on" : ""}`}
-            aria-pressed={view.edges === e}
-            onClick={() => set({ edges: e })}
-          >
-            {t(e === "angular" ? "erd.canvas.edges.angular" : "erd.canvas.edges.curved")}
-          </button>
-        ))}
+      {/* 좌상단 — [보기] 하나. 누르면 행, 항목, 그리기를 모은 판이 열린다. 고른 쪽만 채운다(§3).
+          항목 칸은 resin 의 부품(cardParts)이고 그리기도 resin 이 한다 — amber 는 판의 틀만 만든다 */}
+      <div className="erd-float erd-float-tl" ref={viewFloatRef}>
+        <button className={`erd-float-btn ${viewOpen ? "on" : ""}`} aria-expanded={viewOpen} aria-haspopup="dialog" onClick={() => setViewOpen((o) => !o)}>
+          {t("erd.canvas.view")}
+          <span className="erd-view-summary">{summary}</span>
+          <Icon name="chevron-down" size={14} />
+        </button>
       </div>
+      {viewOpen && (
+        <div className="select-menu erd-view-panel" ref={viewPanelRef} role="dialog" aria-label={t("erd.canvas.view")}>
+          <div className="erd-view-title">{t("erd.canvas.rows")}</div>
+          <div className="erd-view-row">
+            {COLUMN_LEVELS.map((c) => (
+              <Tooltip key={c.id} label={c.hint}>
+                <button className={`erd-float-btn ${view.columns === c.id ? "on" : ""}`} aria-pressed={view.columns === c.id} onClick={() => set({ columns: c.id })}>
+                  {c.label}
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+          <div className="erd-view-title">
+            {t("erd.canvas.parts")}
+            <span className="erd-view-note">{view.columns === "none" ? t("erd.canvas.partsLocked") : t("erd.canvas.partsHint")}</span>
+          </div>
+          <div className={`erd-view-parts${view.columns === "none" ? " is-locked" : ""}`} ref={partsRef} />
+          <div className="erd-view-title">{t("erd.canvas.drawing")}</div>
+          <div className="erd-view-row">
+            {(["down", "right"] as const).map((d) => (
+              <Tooltip key={d} label={t(d === "down" ? "erd.canvas.direction.downHint" : "erd.canvas.direction.rightHint")}>
+                <button className={`erd-float-btn ${view.direction === d ? "on" : ""}`} aria-pressed={view.direction === d} onClick={() => set({ direction: d })}>
+                  {t(d === "down" ? "erd.canvas.direction.down" : "erd.canvas.direction.right")}
+                </button>
+              </Tooltip>
+            ))}
+            <span className="erd-float-sep" aria-hidden="true" />
+            {(["angular", "curved"] as const).map((e) => (
+              <button key={e} className={`erd-float-btn ${view.edges === e ? "on" : ""}`} aria-pressed={view.edges === e} onClick={() => set({ edges: e })}>
+                {t(e === "angular" ? "erd.canvas.edges.angular" : "erd.canvas.edges.curved")}
+              </button>
+            ))}
+            <span className="erd-float-sep" aria-hidden="true" />
+            <Tooltip label={t("erd.canvas.auditHint")}>
+              <button
+                className={`erd-float-btn ${view.audit === "expand" ? "on" : ""}`}
+                aria-pressed={view.audit === "expand"}
+                onClick={() => set({ audit: view.audit === "expand" ? "collapse" : "expand" })}
+              >
+                {t("erd.canvas.audit")}
+              </button>
+            </Tooltip>
+          </div>
+        </div>
+      )}
 
       {/* 우하단 — 화면 조작. 패널이 열리면 패널 왼쪽으로 비켜선다 */}
       <div
@@ -523,6 +710,54 @@ export function ErdCanvas({
         ))}
       </div>
 
+      {/* 우상단 — 찾기(⌘F). 본문 검색 바와 같은 구성이고, 패널이 열리면 패널 왼쪽으로 비켜선다 */}
+      {findOpen && (
+        <div
+          className="page-find erd-find"
+          ref={findBarRef}
+          data-low={findLow || undefined}
+          style={
+            inspected
+              ? {
+                  right: `calc(min(${panelWidth}px, 100% - 120px) + 10px)`,
+                  maxWidth: `calc(100% - min(${panelWidth}px, 100% - 120px) - 20px)`,
+                }
+              : undefined
+          }
+        >
+          <Icon name="search" size={14} />
+          <input
+            ref={findInputRef}
+            className="page-find-input"
+            autoFocus
+            placeholder={t("erd.canvas.findPh")}
+            value={findQuery}
+            onChange={(e) => {
+              setFindQuery(e.target.value);
+              runFind(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return;
+              if (e.key === "Enter") stepFind(e.shiftKey ? -1 : 1);
+              if (e.key === "Escape") {
+                e.stopPropagation(); // 정보창과 패널을 닫는 Esc 까지 가지 않게
+                closeFind();
+              }
+            }}
+          />
+          <span className="page-find-count">{findCount ? `${findIdx + 1}/${findCount}` : findQuery.trim() ? "0" : ""}</span>
+          <button className="page-find-nav" aria-label={t("common.find.prev")} onClick={() => stepFind(-1, true)} disabled={!findCount}>
+            <Icon name="chevron-left" size={14} />
+          </button>
+          <button className="page-find-nav" aria-label={t("common.find.next")} onClick={() => stepFind(1, true)} disabled={!findCount}>
+            <Icon name="chevron-right" size={14} />
+          </button>
+          <button className="page-find-nav" aria-label={t("common.close")} onClick={closeFind}>
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+      )}
+
       {busy && (
         <div className="erd-status">
           <Spinner />
@@ -531,7 +766,13 @@ export function ErdCanvas({
       )}
       {error && <div className="erd-status error-note">{error}</div>}
 
-      <div className="erd-pop rz-details" ref={popRef} role="dialog" hidden={!popped} />
+      {/* resin 이 채우는 상자 옆에 글자 높이 선택 칠을 둔다 — 상자 안이면 replaceChildren 이 칠 층을 지운다 */}
+      <div className="erd-pop" ref={popRef} role="dialog" hidden={!popped}>
+        <div className="glyph-sel">
+          <div className="rz-details" ref={popBodyRef} />
+          <SelectionPaint containerRef={popBodyRef} />
+        </div>
+      </div>
 
       {inspected && (
         <aside
@@ -566,7 +807,10 @@ export function ErdCanvas({
               </button>
             </Tooltip>
           </div>
-          <div className="erd-panel-body rz-details" ref={panelBodyRef} />
+          <div className="erd-panel-body glyph-sel">
+            <div className="rz-details" ref={panelBodyRef} />
+            <SelectionPaint containerRef={panelBodyRef} />
+          </div>
         </aside>
       )}
     </div>

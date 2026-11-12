@@ -1,6 +1,6 @@
 // 필기노트 인라인 질문(노션 댓글식) 레이어 — 읽기 모드 전용.
 // 드래그 선택 → "질문" 플로팅 버튼 → 우측 고정 패널에서 질문 → AI 짧은 답변 → 사이드카에 저장.
-// 저장된 질문은 본문 텍스트에 하이라이트(CSS Custom Highlight API, DOM 무변경)로 표시되고
+// 저장된 질문은 본문 텍스트에 형광펜(GlyphPaint — 글자 높이로 덮는 층, DOM 무변경)으로 표시되고
 // 클릭하면 우측 패널(항상 1개)로 스레드를 본다. 패널에서 후속 질문을 이어갈 수 있고
 // 이전 문답이 AI 에 문맥으로 전달된다. 앵커 = "렌더된 텍스트 문자열 + n번째 출현".
 //
@@ -11,6 +11,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
@@ -30,12 +31,11 @@ import { ConfirmDelete, DiscardModal, timeAgo, Tooltip } from "../ui";
 import { Icon } from "../icons";
 import { t } from "../lib/i18n";
 import { blockRangeFromSelection } from "../lib/mdBlocks";
+import { openEnclosingToggles } from "../lib/mdDetails";
 import { nthIndex, rangeAt } from "../lib/noteAnchor";
 import { SelectionSweep } from "./SelectionSweep";
+import { GlyphPaint, SelectionPaint, type GlyphMark } from "./GlyphPaint";
 import { Button } from "@/components/ui/button";
-
-const HIGHLIGHT_KEY = "note-q";
-const CURRENT_KEY = "note-q-cur";
 
 // 패널은 우측 여백에 고정(CSS)이라 좌표를 들고 다니지 않는다 — 상태 하나 = 패널 최대 1개
 type Pop =
@@ -53,16 +53,6 @@ function offsetIn(container: Node, node: Node, offset: number): number {
     return 0;
   }
   return r.toString().length;
-}
-
-type HighlightRegistry = {
-  set: (key: string, highlight: unknown) => void;
-  delete: (key: string) => void;
-};
-function highlightRegistry(): HighlightRegistry | null {
-  const css = CSS as unknown as { highlights?: HighlightRegistry };
-  const HL = (window as unknown as { Highlight?: unknown }).Highlight;
-  return css.highlights && HL ? css.highlights : null;
 }
 
 /** 말풍선 안의 대기 한 줄 — **바가 없다.** 기다림의 모션은 본문 위를 지나가는 형광펜
@@ -83,12 +73,17 @@ function CmtMsg({
   children: React.ReactNode;
 }) {
   const me = who === "me";
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  // 칠 층은 말풍선 밖(줄)에 깐다 — 말풍선 안이면 .cmt-a > *:last-child 가 칠 층을 잡는다
   return (
-    <div className={`cmt-msg ${me ? "me" : "ai"}`}>
+    <div className={`cmt-msg glyph-sel ${me ? "me" : "ai"}`}>
       <span className="cmt-avatar" aria-hidden="true">
         <Icon name={me ? "user" : "sparkles"} size={12} />
       </span>
-      <div className={`${me ? "cmt-q" : "cmt-a"} ${markdown ? "markdown" : ""}`}>{children}</div>
+      <div ref={bubbleRef} className={`${me ? "cmt-q" : "cmt-a"} ${markdown ? "markdown" : ""}`}>
+        {children}
+      </div>
+      <SelectionPaint containerRef={bubbleRef} />
     </div>
   );
 }
@@ -183,6 +178,14 @@ export function NoteCommentLayer({
     pos: Map<string, number>;
     missing: Set<string>;
   }>({ pos: new Map(), missing: new Set() });
+  // 형광펜으로 칠할 앵커들(rangesRef 와 같은 값) — 칠은 다시 그려야 하니 state 로도 든다
+  const [painted, setPainted] = useState<{ id: string; range: Range }[]>([]);
+  // 형광펜 층을 깔 자리 — 본문과 같이 스크롤되는 상자(GlyphPaint 주석)
+  const [wrapEl, setWrapEl] = useState<HTMLElement | null>(null);
+  useEffect(
+    () => setWrapEl(containerRef.current?.closest<HTMLElement>(".note-read-wrap") ?? null),
+    [containerRef],
+  );
 
   const notifyCount = useCallback(
     (list: NoteComment[]) => onCountChange?.(list.length),
@@ -200,7 +203,9 @@ export function NoteCommentLayer({
       if (!fromList) return;
       setListOpen(false);
       const hit = rangesRef.current.find((r) => r.id === id);
-      // Range 는 스크롤 대상이 못 되므로 앵커가 걸린 요소를 올린다 — 문장 단위면 충분하다
+      // Range 는 스크롤 대상이 못 되므로 앵커가 걸린 요소를 올린다 — 문장 단위면 충분하다.
+      // 접힌 마크다운 토글 안이면 먼저 편다
+      openEnclosingToggles(hit?.range.startContainer.parentElement);
       hit?.range.startContainer.parentElement?.scrollIntoView({
         block: "center",
         behavior: "smooth",
@@ -224,8 +229,7 @@ export function NoteCommentLayer({
     };
   }, [noteRel, notifyCount]);
 
-  // 앵커 복원: 위치(목록 정렬용) → Range → CSS Custom Highlight.
-  // 하이라이트를 못 쓰는 환경에서도 위치 계산과 스크롤은 그대로 살려 둔다(목록은 계속 동작).
+  // 앵커 복원: 위치(목록 정렬용) → Range → 형광펜(GlyphPaint).
   useEffect(() => {
     const c = containerRef.current;
     rangesRef.current = [];
@@ -248,46 +252,20 @@ export function NoteCommentLayer({
       else missing.add(cm.id);
     }
     rangesRef.current = found;
+    setPainted(found);
     setAnchors({ pos, missing });
-    const registry = highlightRegistry();
-    if (!registry) return;
-    const HL = (
-      window as unknown as { Highlight: new (...r: Range[]) => unknown }
-    ).Highlight;
-    if (found.length) registry.set(HIGHLIGHT_KEY, new HL(...found.map((f) => f.range)));
-    else registry.delete(HIGHLIGHT_KEY);
-    return () => {
-      try {
-        registry.delete(HIGHLIGHT_KEY);
-      } catch {
-        /* noop */
-      }
-    };
   }, [comments, body, containerRef]);
 
   // 지금 열려 있는 스레드의 문장만 진하게. 목록에서 들어왔을 때 "본문의 어디였는지"가
-  // 보여야 하기 때문이다 — 그 한 건만 덮어 칠하므로 note-q 위에 얹는다.
-  useEffect(() => {
-    const registry = highlightRegistry();
-    if (!registry) return;
-    const id = pop?.kind === "view" ? pop.id : null;
-    const hit = id ? rangesRef.current.find((r) => r.id === id) : null;
-    if (!hit) {
-      registry.delete(CURRENT_KEY);
-      return;
-    }
-    const HL = (
-      window as unknown as { Highlight: new (...r: Range[]) => unknown }
-    ).Highlight;
-    registry.set(CURRENT_KEY, new HL(hit.range));
-    return () => {
-      try {
-        registry.delete(CURRENT_KEY);
-      } catch {
-        /* noop */
-      }
-    };
-  }, [pop, comments]);
+  // 보여야 하기 때문이다 — 뒤에 온 것이 위에 칠해지므로 그 한 건을 맨 뒤로 보낸다.
+  const curId = pop?.kind === "view" ? pop.id : null;
+  const marks = useMemo<GlyphMark[]>(() => {
+    const rest = painted
+      .filter((p) => p.id !== curId)
+      .map((p) => ({ range: p.range, tone: "q" as const }));
+    const cur = painted.find((p) => p.id === curId);
+    return cur ? [...rest, { range: cur.range, tone: "q-cur" }] : rest;
+  }, [painted, curId]);
 
   // 드래그 선택 감시 → 앵커/출현 인덱스/버튼 위치를 그 자리에서 계산 (rAF 스로틀)
   useEffect(() => {
@@ -738,6 +716,8 @@ export function NoteCommentLayer({
 
   return createPortal(
     <>
+      {/* 형광펜은 body 가 아니라 본문 상자 안에 깐다 — 같이 스크롤돼야 한다(GlyphPaint) */}
+      {wrapEl && createPortal(<GlyphPaint containerRef={containerRef} marks={marks} />, wrapEl)}
       {sweepAt && (
         <SelectionSweep
           containerRef={containerRef}
@@ -749,18 +729,23 @@ export function NoteCommentLayer({
           onClick={askingAt && !pop ? () => setPop(askingAt.restore) : undefined}
         />
       )}
-      {selInfo && !pop && (
+      {/* 패널이 떠 있어도 뜬다 — 새로 드래그해 물으면 openAsk 가 패널을 바꿔 끼운다 */}
+      {selInfo && (
         <div className="cmt-fab-bar" style={fabStyle}>
-          <button
-            className="cmt-fab"
-            title={t("notes.cmt.askTip")}
-            // mousedown 은 선택 해제 방지만, 열기는 click 에서 (앵커는 이미 캡처됨)
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={openAsk}
-          >
-            <Icon name="message" size={13} />
-            {t("notes.cmt.ask")}
-          </button>
+          {/* 답을 기다리는 동안엔 새 질문을 열지 않는다 — 대기 자리(asking)가 하나뿐이라
+              새 패널이 남의 대기를 떠안고, 답이 오면 그 패널이 엉뚱한 스레드로 바뀐다 */}
+          {!asking && (
+            <button
+              className="cmt-fab"
+              title={t("notes.cmt.askTip")}
+              // mousedown 은 선택 해제 방지만, 열기는 click 에서 (앵커는 이미 캡처됨)
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={openAsk}
+            >
+              <Icon name="message" size={13} />
+              {t("notes.cmt.ask")}
+            </button>
+          )}
           {onPromote && (
             <button
               className="cmt-fab"

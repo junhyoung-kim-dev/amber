@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Markdown } from "./Markdown";
 import { PageFind } from "./PageFind";
+import { NoteCrumb } from "./NoteCrumb";
 import { TREE_ROW_ATTR, TreeFindBar, TreeLabel, useTreeFind } from "./TreeFind";
 import { headingSection } from "../lib/mdSecRefs";
 import { NoteCommentLayer } from "./NoteComments";
@@ -50,6 +51,7 @@ import {
   useNoteAiRun,
 } from "../lib/noteAiRun";
 import { NoteSpanAiModal } from "./NoteSpanAiModal";
+import { SelectionPaint } from "./GlyphPaint";
 import { RootPicker } from "./RootPicker";
 import { rootDisplayName, WORKSPACE_EVENT } from "../lib/workspace";
 import {
@@ -59,6 +61,12 @@ import {
 import { loadNoteConcepts, type NoteConceptLink } from "../lib/noteConcepts";
 import { decideDiskSync, keepCaret, watchNotesRoot } from "../lib/noteWatch";
 import { openConceptInApp, OPEN_NOTE } from "../lib/nav";
+import {
+  inClosedToggle,
+  openEnclosingToggles,
+  toggleShortcut,
+  toggleTitleEnter,
+} from "../lib/mdDetails";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
@@ -244,6 +252,30 @@ export function NotesView({
     );
   };
 
+  // `>>` + 스페이스 = 토글 뼈대, 토글 제목 줄의 Enter = 본문 자리로(lib/mdDetails.ts).
+  // 뼈대도 execCommand 로 넣는다 — ⌘Z 로 되돌릴 수 있게(insertAtCaret 과 같은 이유)
+  const onSrcKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    const el = e.currentTarget;
+    if (el.selectionStart !== el.selectionEnd) return;
+    if (e.key === " ") {
+      const tg = toggleShortcut(el.value, el.selectionStart);
+      if (!tg) return;
+      e.preventDefault();
+      el.setSelectionRange(tg.start, tg.end);
+      if (!document.execCommand("insertText", false, tg.text)) {
+        el.setRangeText(tg.text, tg.start, tg.end, "end");
+        setDraft(el.value);
+      }
+      el.setSelectionRange(tg.caret, tg.caret);
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      const at = toggleTitleEnter(el.value, el.selectionStart);
+      if (at === null) return;
+      e.preventDefault();
+      el.setSelectionRange(at, at);
+    }
+  };
+
   // Finder 에서 끌어다 놓기 — 파일 드롭은 Tauri 가 창 단위로 가로채서 HTML drop 이벤트로는
   // 파일이 오지 않는다. 그래서 웹뷰 드롭 이벤트를 받고, 놓은 자리가 편집 칸일 때만 받는다.
   useEffect(() => {
@@ -330,7 +362,8 @@ export function NotesView({
       let cur = toc[0].id;
       for (const t of toc) {
         const el = document.getElementById(t.id);
-        if (!el) continue;
+        // 접힌 토글 안의 제목은 화면에 없다 — 토글 머리 바로 밑 자리로 읽혀 현재 절을 엉뚱하게 잡는다
+        if (!el || inClosedToggle(el)) continue;
         if (el.getBoundingClientRect().top - cTop <= 96) cur = t.id;
         else break;
       }
@@ -379,9 +412,10 @@ export function NotesView({
 
   function scrollToHeading(id: string) {
     setActiveHeading(id);
-    document
-      .getElementById(id)
-      ?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
+    const el = document.getElementById(id);
+    // 접힌 토글 안의 제목이면 펴야 보인다 — 목차는 토글 안의 제목도 싣는다
+    openEnclosingToggles(el);
+    el?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   }
 
   const reload = useCallback(async () => {
@@ -969,7 +1003,6 @@ export function NotesView({
   const fileName = selected
     ? selected.slice(selected.lastIndexOf("/") + 1).replace(/\.md$/i, "")
     : "";
-  const crumbDirs = selected ? parentOf(selected).split("/").filter(Boolean) : [];
   // 본문의 `![](_assets/…)` 를 풀 기준 폴더
   const assetBase = selected ? noteDirPath(selected) : undefined;
 
@@ -1078,10 +1111,8 @@ export function NotesView({
         />
         {selected ? (
           <div className={`notes-detail ${editing ? "editing" : ""}`}>
-            <div className="note-crumb">
-              <Icon name="folder" size={12} />
-              {[t("notes.title"), ...crumbDirs].join(" › ")}
-            </div>
+            {/* 경로 줄 = 경로 복사(⌥⌘C) — NoteCrumb 주석 참고 */}
+            <NoteCrumb path={selected} active={active} />
             <div className="detail-head">
               {/* 제목 = 파일명이다. 트리까지 가지 않고 여기서 바꾸는 게 자연스럽다 —
                   누르면 트리의 이름 변경과 **같은 모달**을 연다(이름 검증·중복 처리·에러
@@ -1277,6 +1308,7 @@ export function NotesView({
                     className={`textarea note-textarea${dropHot ? " is-drop" : ""}`}
                     value={draft}
                     onPaste={onSrcPaste}
+                    onKeyDown={onSrcKeyDown}
                     onChange={(e) => {
                       setDraft(e.target.value);
                       // 글자를 고치면 앞서 잡아 둔 구간의 오프셋이 밀린다 — 그 자리에 그대로
@@ -1296,8 +1328,9 @@ export function NotesView({
                     spellCheck={false}
                   />
                 </div>
-                <div className="markdown note-preview" ref={previewRef}>
+                <div className="markdown note-preview glyph-sel" ref={previewRef}>
                   <Markdown assetBase={assetBase}>{previewMd}</Markdown>
+                  <SelectionPaint containerRef={previewRef} />
                 </div>
               </div>
             ) : (
@@ -1324,6 +1357,7 @@ export function NotesView({
                     setSpanAi("selection");
                   }}
                 />
+                <SelectionPaint containerRef={mdRef} />
                 {toc.length >= 2 && (
                   <nav className="note-toc" ref={tocRef}>
                     <div className="note-toc-label">{t("notes.toc")}</div>

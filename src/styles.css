@@ -1863,7 +1863,7 @@ body.resizing-col .pane-resizer::after {
   outline: none;
   box-shadow: var(--focus-ring);
 }
-/* 검색 결과 — 노트 질문 하이라이트(note-q)와 같은 층이지만 색을 달리해 겹쳐도 구분된다.
+/* 검색 결과 — 노트 질문 형광펜(.glyph-paint .q)과 색을 달리해 겹쳐도 구분된다.
    현재 결과만 진하게: 여러 건이 걸렸을 때 지금 어디에 서 있는지가 보여야 한다. */
 ::highlight(page-find) {
   background-color: rgba(120, 120, 130, 0.3);
@@ -2552,6 +2552,117 @@ body.resizing-col .pane-resizer::after {
 .md-alert-caution {
   --md-alert: var(--alert-caution);
 }
+/* 토글(`<details>` — lib/mdDetails.ts + components/Markdown.tsx 의 MdToggle). 앉은 유리 카드다(§2 유리):
+   테두리가 있는 면이라 유리를 쓰고, 뒤에 흐를 것이 없으니 blur 는 없다. 손이 닿으면 한 단 들린다.
+   펼침은 §9.2 의 grid 트랙(0fr, 1fr) — .tree-children 과 같은 수법이라 안의 글이 다시 흐르지 않는다. */
+.md-toggle {
+  margin: 12px 0;
+  border: 1px solid var(--glass-edge);
+  border-radius: 12px;
+  background: var(--glass-fill);
+  box-shadow: var(--glass-sheen), var(--glass-seat);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.md-toggle:has(> .md-toggle-sum:hover) {
+  border-color: var(--glass-edge-hover);
+  box-shadow: var(--glass-sheen-hover), var(--glass-seat-hover);
+}
+/* 안쪽 토글은 테만 남긴다 — 유리 위에 유리를 또 깔면 채움과 그림자가 겹겹이 짙어진다 */
+.md-toggle .md-toggle {
+  background: none;
+  box-shadow: none;
+}
+.md-toggle-sum {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 14px 9px 12px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.md-toggle-sum:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.md-toggle-caret {
+  flex-shrink: 0;
+  /* 꺾쇠를 제목 첫 줄 가운데에 — 제목이 여러 줄이어도 첫 줄에 붙어 있게 */
+  margin-top: calc((1.7em - 14px) / 2);
+  color: var(--text-3);
+  transition: transform 0.24s var(--ease-out), color 0.12s;
+}
+.md-toggle-sum:hover .md-toggle-caret {
+  color: var(--text);
+}
+.md-toggle[data-open="true"] > .md-toggle-sum .md-toggle-caret {
+  transform: rotate(90deg);
+}
+.md-toggle-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* 안에 든 것(문단 2, 코드 1) — 펴기 전에 무엇이 접혀 있는지 흐리게 말한다 */
+.md-toggle-meta {
+  flex-shrink: 0;
+  margin-top: calc((1.7em - 1.5em) / 2);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* 접히는 게 **끝난 뒤** 숨긴다(.parked 와 같은 지연) — 바로 숨기면 닫히는 동안 속이 먼저 사라진다.
+   visibility:hidden 이 접힌 몸통을 탭 순서와 클릭에서 뺀다(inert 는 WKWebView 커서 문제로 안 쓴다). */
+.md-toggle-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.28s var(--ease-out), visibility 0s linear 0.28s;
+}
+.md-toggle[data-open="false"] > .md-toggle-body {
+  visibility: hidden;
+}
+.md-toggle[data-open="true"] > .md-toggle-body {
+  grid-template-rows: 1fr;
+  transition-delay: 0s;
+}
+/* 세로 padding 을 두지 않는다 — 닫힌 칸(0fr)에서도 padding 은 남아 글이 한 줄 비친다.
+   위의 테 한 줄과 아래 여백은 안쪽 블록(::before, ::after)으로 준다. */
+.md-toggle-inner {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 16px 0 34px;
+}
+.md-toggle-inner::before {
+  content: "";
+  display: block;
+  height: 1px;
+  margin: 0 0 10px -22px;
+  background: var(--glass-edge);
+}
+.md-toggle-inner::after {
+  content: "";
+  display: block;
+  height: 12px;
+}
+.md-toggle-inner > :first-child {
+  margin-top: 0;
+}
+.md-toggle-inner > :last-child {
+  margin-bottom: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-toggle-caret,
+  .md-toggle-body {
+    transition: none;
+  }
+}
 
 /* ---- 위젯 (투명 창) ---- */
 html.widget-root,
@@ -3175,6 +3286,44 @@ html.widget-root #root {
   color: var(--text-3);
   margin-bottom: 4px;
 }
+/* 경로 줄이 곧 경로 복사 버튼이다(NoteCrumb). 탐색기 머리의 .root-path 와 같은 문법 —
+   평소엔 글자만, 손이 닿으면 면과 끝의 복사 표식이 나오고, 누르면 그 표식이 체크로 바뀐다.
+   왼쪽 -6px: hover 면이 생겨도 글자가 제목 줄 왼쪽 끝에 그대로 맞는다. */
+.note-crumb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: -6px;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, transform 0.16s var(--ease-out);
+}
+.note-crumb-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.note-crumb-btn:active {
+  transform: scale(0.96);
+}
+.note-crumb-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.note-crumb-copy {
+  display: inline-flex;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.note-crumb-btn:hover .note-crumb-copy,
+.note-crumb-btn:focus-visible .note-crumb-copy,
+.note-crumb-btn.copied .note-crumb-copy {
+  opacity: 1;
+}
 .note-textarea {
   flex: 1;
   min-height: 420px;
@@ -3191,11 +3340,56 @@ html.widget-root #root {
   display: flex;
   align-items: flex-start;
   gap: 28px;
+  position: relative; /* 글자 칠(.glyph-paint)이 이 상자를 기준으로 깔린다 */
 }
 .note-read-wrap .markdown {
   flex: 1;
   min-width: 0;
   max-width: 780px; /* 읽기 좋은 본문 폭 + 우측 목차 자리 */
+}
+/* 본문의 드래그 선택과 질문 형광펜 — GlyphPaint 가 글자 상자만큼 칠한다(네이티브 선택 칠은 지운다).
+   WebKit 은 둘째 줄부터 칠을 윗줄 바닥까지 늘려 글자 위가 떠 보였다. 혼합 모드로 깔아 글자 색이
+   그대로 남는다(어두운 판 = screen, 밝은 판 = multiply). 색은 예전 반투명 칠이 판 위에 섞인 값이다:
+   선택 = macOS 기본 선택색, 질문 = 노랑 0.32 / 0.55(밝게), 호박 0.42 / 0.62(어둡게). 지금 것만 진하게(q-cur). */
+.note-read-wrap > .markdown ::selection,
+.glyph-sel ::selection {
+  background: transparent;
+}
+/* 노트 읽기 밖에서 SelectionPaint 를 둔 상자(리포트, 개념, 미리보기, 질문 스레드) — 칠 층의 기준이다.
+   칠 층을 상자 안에 깔아 상자가 스크롤 칸이어도 글자와 같이 구른다. 입력 칸은 이 안에 두지 않는다
+   (위 규칙이 입력 칸의 선택 칠까지 지운다) */
+.glyph-sel {
+  position: relative;
+}
+.glyph-paint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+.glyph-paint > span {
+  position: absolute;
+}
+.glyph-paint > .sel {
+  background: #b3d7ff;
+}
+.glyph-paint > .q {
+  background: rgb(253, 239, 180);
+}
+.glyph-paint > .q-cur {
+  background: rgb(252, 227, 126);
+}
+:root[data-theme="dark"] .glyph-paint {
+  mix-blend-mode: screen;
+}
+:root[data-theme="dark"] .glyph-paint > .sel {
+  background: rgb(37, 78, 123);
+}
+:root[data-theme="dark"] .glyph-paint > .q {
+  background: rgb(82, 51, 0);
+}
+:root[data-theme="dark"] .glyph-paint > .q-cur {
+  background: rgb(120, 76, 0);
 }
 /* 제목 스케일은 위 마크다운 블록이 정본 — 여기서 크기를 다시 정의하지 않는다 */
 .markdown h1,
@@ -4476,21 +4670,7 @@ html.widget-root #root {
 }
 
 /* ---- 필기노트 인라인 질문(노션 댓글식) ---- */
-/* 질문이 달린 텍스트 하이라이트 (CSS Custom Highlight — DOM 무변경) */
-::highlight(note-q) {
-  background-color: rgba(250, 204, 21, 0.32);
-}
-/* 지금 열려 있는 스레드의 문장만 진하게 — 목록에서 들어왔을 때 본문의 어디였는지 보여야 한다.
-   page-find 와 같은 규약(기본 + 현재 한 건만 진하게)이라 값도 맞춘다. */
-::highlight(note-q-cur) {
-  background-color: rgba(250, 204, 21, 0.55);
-}
-:root[data-theme="dark"] ::highlight(note-q) {
-  background-color: rgba(202, 138, 4, 0.42);
-}
-:root[data-theme="dark"] ::highlight(note-q-cur) {
-  background-color: rgba(202, 138, 4, 0.62);
-}
+/* 질문이 달린 텍스트의 형광펜은 .glyph-paint 의 q / q-cur 다(본문 칠은 거기 한 곳) */
 
 /* 드래그 선택 시 뜨는 플로팅 "질문" 버튼 */
 /* 선택 툴바(질문 / 개념으로) — 컨테이너가 위치를 잡고 버튼은 나란히 */
@@ -4498,7 +4678,8 @@ html.widget-root #root {
    "AI로 작성" 모달 위로 '질문 N' 트리거가 떠 있었다(실측). 툴팁(300)·Select 메뉴(60)는 그대로 위. */
 .cmt-fab-bar {
   position: fixed;
-  z-index: 40;
+  /* 패널(.cmt-pop 45) 위 — 패널을 띄운 채 본문 오른쪽 끝을 드래그하면 버튼 바가 패널 밑으로 들어간다 */
+  z-index: 46;
   display: inline-flex;
   gap: 4px;
 }
@@ -8063,6 +8244,93 @@ textarea.todo-edit {
 }
 .erd-stage[data-room="tight"] .erd-float-bl {
   display: none;
+}
+/* [보기] 판 — 좌상단 버튼 하나가 여는 드롭다운. 판은 .select-menu(뜬 유리)이고 줄은 떠 있는 조작과 같은 알약이다.
+   항목 칸에는 resin 의 견본 행(.rz-parts, viewer.css)이 들어간다 — 색은 위 --rz-* 토큰으로 잇는다 */
+.erd-view-summary {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.erd-float-btn.on .erd-view-summary {
+  color: inherit;
+  opacity: 0.6;
+}
+.select-menu.erd-view-panel {
+  position: absolute;
+  top: 48px;
+  left: 10px;
+  z-index: 6; /* 정보창(.erd-pop, 5) 위 */
+  width: max-content;
+  max-width: calc(100% - 20px);
+  max-height: none;
+  overflow: visible;
+  padding: 4px 12px 12px;
+  white-space: normal;
+}
+.erd-view-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 12px 2px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.erd-view-note {
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.erd-view-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+.erd-view-parts.is-locked {
+  opacity: var(--disabled-opacity);
+  pointer-events: none;
+}
+/* ⌘F 찾기 — 본문 검색 바(.page-find)와 같은 구성. 캔버스 위라 다른 떠 있는 조작처럼 뜬 유리를 입는다 */
+.page-find.erd-find {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  max-width: calc(100% - 20px);
+  margin: 0;
+  border-color: var(--glass-edge);
+  background: var(--glass-fill), var(--glass-panel);
+  backdrop-filter: var(--glass-blur-panel);
+  -webkit-backdrop-filter: var(--glass-blur-panel);
+  box-shadow: var(--glass-sheen), var(--shadow-sm);
+}
+/* 좌상단 보기 조작과 부딪히면 그 아래 줄로(ErdCanvas 가 잰다) */
+.page-find.erd-find[data-low] {
+  top: 54px;
+}
+/* 남은 폭이 바보다 좁으면(패널이 넓게 열렸을 때) 입력란이 줄어든다 — 바가 캔버스 밖으로 잘리지 않게.
+   바의 폭 상한은 ErdCanvas 가 패널 폭에 맞춰 준다 */
+.erd-find .page-find-input {
+  min-width: 0;
+}
+/* 맞은 것 회색, 지금 것 노랑 — 본문 검색(::highlight(page-find))과 같은 색. resin 이 표 머리글과 행마다
+   깔아 둔 판(.rz-hit)을 칠한다. viewer.css 의 호버, 끌기, 고른 컬럼보다 한 단계 구체적이라 찾는 동안은 이 색이 남는다 */
+.erd-stage .erd-viewport .rz-content svg .erd-find-hit > .rz-hit {
+  fill: rgb(120, 120, 130);
+  fill-opacity: 0.3;
+}
+.erd-stage .erd-viewport .rz-content svg .erd-find-cur > .rz-hit {
+  fill: rgb(250, 204, 21);
+  fill-opacity: 0.55;
+}
+:root[data-theme="dark"] .erd-stage .erd-viewport .rz-content svg .erd-find-hit > .rz-hit {
+  fill: rgb(160, 160, 175);
+}
+:root[data-theme="dark"] .erd-stage .erd-viewport .rz-content svg .erd-find-cur > .rz-hit {
+  fill: rgb(202, 138, 4);
+  fill-opacity: 0.62;
 }
 .erd-float-pct {
   min-width: 48px;
